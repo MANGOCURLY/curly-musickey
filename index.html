@@ -5,67 +5,188 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>Curly MusicKey</title>
 <style>
-  body { margin: 0; padding: 12px; background: #111; color: #eee;
-         font: 18px/1.4 -apple-system, system-ui, sans-serif; }
-  h1 { font-size: 22px; margin: 0 0 8px; }
-  p { margin: 4px 0; color: #aaa; font-size: 14px; }
-  button { width: 100%; font-size: 22px; padding: 16px; margin: 8px 0;
-           border: 0; border-radius: 10px; background: #2d6cdf; color: #fff; }
-  button.on { background: #2a7a3a; }
-  .box { background: #1c1c1c; border-radius: 8px; padding: 10px; margin: 8px 0; }
-  .row { display: flex; justify-content: space-between; gap: 8px; }
-  .big { font-size: 20px; font-weight: bold; }
-  /* 키 배치 안내도: 한 줄 최대 13키, 실제 키보드처럼 줄마다 조금씩 오른쪽으로 */
-  .kb { margin: 8px 0; }
-  .kr { display: flex; gap: 0.5%; margin-bottom: 4px; }
-  .kr:nth-child(2) { margin-left: 3.5%; }
-  .kr:nth-child(3) { margin-left: 5.5%; }
-  .kr:nth-child(4) { margin-left: 9%; }
-  .k { flex: 0 0 7%; height: 46px; box-sizing: border-box; border-radius: 5px;
-       background: #2a2a2a; color: #888; text-align: center; overflow: hidden;
-       display: flex; flex-direction: column; justify-content: center; }
-  .k b { font-size: 13px; color: #ccc; }
-  .k span { font-size: 9px; line-height: 1.1; word-break: break-all; }
-  .k.drum { background: #3a2a1a; } .k.drum span { color: #e8b27a; }
-  .k.fx { background: #3a1f4a; } .k.fx span { color: #d9a8ff; }
-  .k.inst { background: #1a2a40; } .k.inst span { color: #8fb8ff; }
-  .k.func { background: #1f3a2a; } .k.func span { color: #8fe0b0; }
-  .k.white { background: #e8e8e8; } .k.white b, .k.white span { color: #111; }
-  .k.black { background: #444; } .k.black span { color: #eee; }
-  .k.sel { outline: 2px solid #2d6cdf; }
-  .k.on { background: #e0a800 !important; }
-  .k.on b, .k.on span { color: #000 !important; }
-  /* 시각화: 화면 전체를 덮는다 */
+  :root {
+    --mono: ui-monospace, "SF Mono", Menlo, monospace;
+    --bg: #050607; --panel: #0e1012; --line: #1d2025; --dim: #7d858c; --txt: #f2f4f5;
+    --amber: #ffb000; --cyan: #7fe3ff; --red: #ff4d3d; --bass: #56d6b0; --mel: #8ab4ff;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--txt);
+               font-family: -apple-system, "SF Pro Text", "Apple SD Gothic Neo", system-ui, sans-serif; }
+  #app { min-height: 100dvh; padding: 10px 8px; display: flex; flex-direction: column; gap: 10px; }
+  small { font-size: 10px; font-weight: 700; color: var(--dim); }
+
+  /* 상단 LCD */
+  .lcd { background: var(--panel); border-radius: 8px; box-shadow: inset 0 0 0 1px var(--line);
+         padding: 9px 11px 10px; display: flex; flex-direction: column; gap: 6px; }
+  .lcd-top { display: flex; justify-content: space-between; align-items: center; }
+  .brand { font-size: 9px; letter-spacing: .24em; font-weight: 800; color: var(--dim); }
+  #state { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 700; }
+  #dot { width: 8px; height: 8px; border-radius: 4px; background: #3a3f45; }
+  #dot.on { background: var(--bass); box-shadow: 0 0 8px var(--bass); }
+  .lcd-inst { display: flex; align-items: baseline; gap: 10px; white-space: nowrap; overflow: hidden; height: 32px; }
+  #instNum { font-family: var(--mono); font-size: 26px; font-weight: 800; line-height: 1; }
+  #instName { font-size: 25px; font-weight: 800; letter-spacing: -0.02em; }
+  .lcd-sub { display: flex; gap: 20px; border-top: 1px solid var(--line); padding-top: 7px; }
+  .lcd-sub div { display: flex; align-items: baseline; gap: 7px; }
+  #kit { font-size: 16px; font-weight: 800; color: var(--amber); }
+  #oct { font-size: 16px; font-weight: 800; color: var(--cyan); }
+
+  /* 시작 버튼 */
+  #start { height: 162px; flex: none; border: none; border-radius: 8px; background: #e8ecef; color: var(--bg);
+           display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; font: inherit; }
+  #start .st-main { display: flex; align-items: center; gap: 12px; font-size: 58px; font-weight: 900; letter-spacing: -0.03em; line-height: 1; }
+  #start .st-main i { width: 14px; height: 14px; border-radius: 7px; background: var(--amber); box-shadow: 0 0 10px var(--amber); }
+  #start .st-sub { font-size: 13px; font-weight: 700; color: #4a5158; }
+
+  /* 시퀀서 */
+  #seq { display: none; flex-direction: column; gap: 6px; padding: 0 2px; flex: none; }
+  .seq-top { display: flex; align-items: baseline; gap: 6px; height: 24px; }
+  #bpm { font-family: var(--mono); font-size: 22px; font-weight: 800; line-height: 1; }
+  .sp { flex: 1; }
+  .chip { font-family: var(--mono); font-size: 10px; font-weight: 800; padding: 3px 6px; border-radius: 3px;
+          letter-spacing: .04em; align-self: center; color: #3a3f45; box-shadow: inset 0 0 0 1px var(--line); }
+  #chipPlay.on { background: var(--cyan); color: #001a22; box-shadow: none; }
+  #chipRec.on { background: var(--red); color: #0a0201; box-shadow: none; }
+  #chipMet.on { background: #e8ecef; color: var(--bg); box-shadow: none; }
+  #shiftChip.on { background: var(--red); color: #0a0201; box-shadow: none; }
+  #grid { display: grid; grid-template-columns: repeat(16, minmax(0, 1fr)); gap: 2px; }
+  .c { height: 10px; border-radius: 2px; background: #111316; }
+  .c.down { background: #181b1f; }
+  .c.ph { background: #2f353c; }
+  .c.hit { background: var(--amber); }
+  .c.fx { background: var(--red); }
+  .c.mel { background: var(--cyan); }
+  .c.tail { opacity: .5; }
+  .c.ph.hit, .c.ph.fx, .c.ph.mel { background: #fff; opacity: 1; }
+  .c.gap { margin-right: 3px; }
+  .c.melrow { margin-top: 4px; }
+
+  /* 키보드 안내도: 자주 쓰는 Z줄·A줄은 높게, 줄마다 남는 폭은 그 줄 키들이 나눠 가진다 */
+  .kbwrap { display: flex; flex-direction: column; gap: 3px; margin-top: auto; }
+  .kbhead { display: flex; justify-content: flex-end; align-items: center; height: 18px; }
+  .kr { display: flex; gap: 3px; flex: none; }
+  .kr.r0 { height: 30px; }
+  .kr.r1 { height: 44px; padding-left: 12px; }
+  .kr.r2 { height: 58px; padding-left: 20px; }
+  .kr.r3 { height: 64px; padding-left: 30px; }
+  .k { flex: 1 1 0; min-width: 0; height: 100%; display: flex; flex-direction: column; justify-content: space-between;
+       padding: 3px 2px 4px; overflow: hidden; border-radius: 4px; background: #0b0c0e; color: #2f343a;
+       transition: transform 80ms ease-out; }
+  .k b { display: block; text-align: left; font-family: var(--mono); font-size: 9px; font-weight: 700; opacity: .6; line-height: 1; }
+  .k span { flex: 1; display: flex; align-items: center; justify-content: center; text-align: center;
+            white-space: pre-line; letter-spacing: -0.03em; line-height: 1; font-weight: 800; }
+  .r0 .k b { font-size: 11px; font-weight: 800; text-align: center; opacity: 1; }
+  .r0 .k span { font-size: 8px; font-weight: 700; }
+  .r1 .k b { font-size: 8px; }
+  .r1 .k span { font-size: 13px; }
+  .r2 .k span { font-size: 21px; }
+  .r3 .k span { font-size: 13px; line-height: 1.05; letter-spacing: -0.06em; }
+
+  .k.drum { background: #15110a; color: var(--amber); box-shadow: inset 0 3px 0 var(--amber), inset 0 0 0 1px #3a2c10; border-radius: 6px; }
+  .k.drum.on { background: var(--amber); color: #0a0700; box-shadow: 0 0 18px rgba(255,176,0,.75); transform: scale(.92); }
+  .k.fx { background: var(--red); color: #0a0201; box-shadow: inset 0 0 0 1px #ff8a7e; border-radius: 6px; }
+  .k.fx.on { background: #ffd0cb; color: #3a0500; box-shadow: 0 0 0 2px var(--red), 0 0 18px rgba(255,77,61,.85); transform: scale(.92); }
+  .k.white { background: #e8ecef; color: #0b0d0f; }
+  .k.black { background: #000; color: #cfd6dc; box-shadow: inset 0 0 0 1px #2f343a; }
+  .k.white.on, .k.black.on { background: var(--cyan); color: #001a22; box-shadow: 0 0 16px rgba(127,227,255,.75); transform: translateY(3px); }
+  .k.inst { --g: var(--mel); background: var(--panel); color: var(--g); box-shadow: inset 0 -2px 0 var(--g); }
+  .k.inst.bass { --g: var(--bass); }
+  .k.inst.sel { background: var(--g); color: #000; box-shadow: 0 0 12px var(--g); }
+  .k.func { background: var(--panel); color: #cfd6dc; box-shadow: inset 0 -2px 0 #cfd6dc; }
+  .k.func.sel { background: var(--txt); color: #000; }
+  .k.inst.on, .k.func.on { transform: scale(.92); }
+
+  /* 보조 키 안내 */
+  .help { display: flex; flex-wrap: wrap; gap: 5px 12px; font-size: 11px; color: #a3abb2; font-weight: 600; padding: 0 2px; }
+  .help span { display: flex; align-items: center; gap: 4px; }
+  kbd { font-family: var(--mono); font-size: 10px; font-weight: 800; color: var(--bg); background: #cfd6dc;
+        border-radius: 3px; padding: 1px 4px; }
+  kbd.red { background: var(--red); color: #0a0201; }
+  .help .note { width: 100%; color: var(--dim); font-size: 10px; }
+
+  /* 시각화: 화면 전체를 덮고, 맨 아래에 정보 띠 */
   #viz { position: fixed; inset: 0; background: #000; display: none; z-index: 10; }
   #viz canvas { width: 100%; height: 100%; display: block; }
-  #vizInfo { position: absolute; left: 0; right: 0; bottom: 16px; text-align: center;
-             color: #777; font-size: 14px; }
+  .vband { position: absolute; left: 0; right: 0; bottom: 0; padding: 12px 10px 14px;
+           border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 10px; background: #000; }
+  .vrow { display: flex; align-items: baseline; gap: 14px; white-space: nowrap; overflow: hidden; }
+  #vNum { font-family: var(--mono); font-size: 19px; font-weight: 800; }
+  #vName { font-size: 19px; font-weight: 800; }
+  #vKit { font-size: 17px; font-weight: 800; color: var(--amber); }
+  #vOct { font-size: 17px; font-weight: 800; color: var(--cyan); }
+  .vclose { align-self: flex-end; display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 700;
+            color: #cfd6dc; box-shadow: inset 0 0 0 1px #2f343a; border-radius: 999px; padding: 5px 12px; }
+  .vclose b { font-family: var(--mono); }
 </style>
 </head>
 <body>
-<h1>Curly MusicKey</h1>
-<button id="start">시작 (소리 켜기)</button>
+<div id="app">
+  <div class="lcd">
+    <div class="lcd-top">
+      <span class="brand">CURLY MUSICKEY</span>
+      <span id="state"><i id="dot"></i><span id="stateTxt">오디오 꺼짐</span></span>
+    </div>
+    <div class="lcd-inst"><span id="instNum"></span><span id="instName"></span></div>
+    <div class="lcd-sub">
+      <div><small>킷</small><span id="kit"></span></div>
+      <div><small>옥타브</small><span id="oct"></span></div>
+    </div>
+  </div>
 
-<div class="box">
-  <div class="row"><span>악기</span><span id="inst" class="big">-</span></div>
-  <div class="row"><span>드럼 킷</span><span id="kit" class="big">-</span></div>
-  <div class="row"><span>옥타브</span><span id="oct" class="big">-</span></div>
-  <div class="row"><span>오디오</span><span id="state">시작 전</span></div>
-  <div>눌린 키: <span id="pressed">(없음)</span></div>
+  <button id="start">
+    <span class="st-main"><i></i>시작</span>
+    <span class="st-sub">탭해서 소리 켜기</span>
+  </button>
+
+  <div id="seq">
+    <div class="seq-top">
+      <span id="bpm">128</span><small>BPM</small><span class="sp"></span>
+      <span id="chipPlay" class="chip">■ 정지</span>
+      <span id="chipRec" class="chip">● REC</span>
+      <span id="chipMet" class="chip">MET</span>
+    </div>
+    <div id="grid"></div>
+  </div>
+
+  <div class="kbwrap">
+    <div class="kbhead"><span id="shiftChip" class="chip">⇧ SHIFT · 효과음</span></div>
+    <div id="kb"></div>
+  </div>
+
+  <div class="help">
+    <span><kbd>Space</kbd>재생</span>
+    <span><kbd>Enter</kbd>녹음</span>
+    <span><kbd>Tab</kbd>메트로놈</span>
+    <span><kbd>⌫</kbd>지우기</span>
+    <span><kbd>- =</kbd>BPM</span>
+    <span><kbd>Q</kbd>랜덤 비트</span>
+    <span><kbd>←→</kbd>킷</span>
+    <span><kbd>↑↓</kbd>옥타브</span>
+    <span><kbd class="red">⇧+Z줄</kbd>효과음</span>
+    <span><kbd>`</kbd>시각화</span>
+    <span><kbd>Esc</kbd>전체 정지</span>
+    <span class="note">Shift와 함께: Q 랜덤 음색 · ⌫ 전체 지우기 · - = BPM 5씩</span>
+  </div>
 </div>
 
-<div class="kb" id="kb"></div>
-<p>Z줄 = 드럼 · <b>Shift 누른 채 Z줄 = 효과음</b><br>
-   A줄/Q줄 = 건반 · 숫자 1~0 = 악기 선택<br>
-   ←→ 드럼 킷 · ↑↓ 옥타브 · ` 시각화 · Esc 모든 소리 끄기</p>
-
-<div id="viz"><canvas id="vizCanvas"></canvas><div id="vizInfo"></div></div>
+<div id="viz">
+  <canvas id="vizCanvas"></canvas>
+  <div class="vband">
+    <div class="vrow">
+      <span><span id="vNum"></span> <span id="vName"></span></span>
+      <span id="vKit"></span>
+      <span id="vOct"></span>
+    </div>
+    <span class="vclose"><b>`</b>또는 탭하면 닫기</span>
+  </div>
+</div>
 
 <script>
 // ================= 키 배치 =================
 const DRUM_KEYS = ["KeyZ","KeyX","KeyC","KeyV","KeyB","KeyN","KeyM","Comma","Period","Slash"];
-// 드럼 자리별 역할. 킷이 바뀌어도 같은 자리는 같은 역할 (Z = 항상 킥)
-const DRUM_NAMES = ["킥","스네어","클랩","닫힌HH","열린HH","로우탐","하이탐","림","카우벨","크래시"];
+// 드럼 자리별 역할. 킷이 바뀌어도 같은 자리는 같은 역할 (Z = 항상 킥). \n = 안내도에서 줄바꿈
+const DRUM_NAMES = ["킥","스네","클랩","닫힌\nHH","열린\nHH","로우\n탐","하이\n탐","림","카우\n벨","크래\n시"];
 // 건반: code → A키의 도(0)에서 몇 반음 위인지 (에이블톤/로직의 컴퓨터 키보드 연주 배치)
 const NOTE_KEYS = {
   KeyA: 0, KeyW: 1, KeyS: 2, KeyE: 3, KeyD: 4, KeyF: 5, KeyT: 6, KeyG: 7,
@@ -78,9 +199,10 @@ const OCT_MIN = -2, OCT_MAX = 2;
 
 // ================= 상태 =================
 let ctx = null, master = null, analyser = null, noiseBuf = null, verbBuf = null;
-let verbIn = null, delayIn = null, wet = null, fxBus = null, kitBuses = [];
+let verbIn = null, delayIn = null, delayNode = null, wet = null, fxBus = null, kitBuses = [];
 let out = null;           // 드럼·효과음 재료가 연결될 곳 (킷마다 다름)
-let inst = 4;             // 지금 선택된 악기 (INSTS 번호, 4 = 리드)
+let inst = 4;             // 지금 선택된 악기 (INSTS 번호, 4 = 리드, -1 = 랜덤 음색)
+let randomDef = null;     // Shift+Q로 만든 랜덤 음색
 let kitIndex = 0;         // 드럼 킷 번호
 let octave = 0;           // 옥타브 이동 (-2 ~ +2)
 const pressed = new Set();  // 지금 눌린 키(code)
@@ -88,6 +210,7 @@ const held = new Map();     // 누르고 있는 건반 code → 울리는 소리
 const active = new Set();   // 지금 울리는 모든 소리 (Esc용)
 
 const $ = id => document.getElementById(id);
+const curDef = () => (inst === -1 ? randomDef : INSTS[inst]);
 
 // ================= 오디오 기본 =================
 // 소리 → master(음량) → 컴프레서(리미터처럼 강하게) → 분석기(시각화) → 스피커
@@ -180,15 +303,18 @@ function buildWet() {
   conv.buffer = verbBuf;
   const verbOut = gainNode(0.5);
   verbIn.connect(conv).connect(verbOut).connect(master);
-  const dl = ctx.createDelay(1);
-  dl.delayTime.value = 0.35;          // 128 BPM의 점8분음표 근처
+  delayNode = ctx.createDelay(2);
+  delayNode.delayTime.value = delayTimeForBpm();
   const fb = gainNode(0.35);          // 메아리가 얼마나 반복될지
   const dlf = filterNode("lowpass", 2500);
-  delayIn.connect(dl);
-  dl.connect(dlf).connect(fb).connect(dl);
+  delayIn.connect(delayNode);
+  delayNode.connect(dlf).connect(fb).connect(delayNode);
   dlf.connect(master);
-  wet = [conv, verbOut, dl, fb, dlf];
+  wet = [conv, verbOut, delayNode, fb, dlf];
 }
+
+// 딜레이 간격 = 점8분음표 (16분음표 3개). BPM이 바뀌면 같이 바뀐다
+function delayTimeForBpm() { return Math.min(2, 0.75 * 60 / bpm); }
 
 // 울리는 소리를 기록해 두고, 끝나면 지운다
 function track(g, srcs) {
@@ -288,8 +414,9 @@ function clap(t, freq, tail, vol) {
 }
 
 // ================= 드럼 킷 8개 (순서 = DRUM_NAMES, names로 일부 자리 이름 바꿈) =================
+// style = 랜덤 비트(Q)를 만들 때 쓰는 장르 규칙 (아래 STYLES)
 const KITS = [
-  { name: "808", hits: [
+  { name: "808", style: "hiphop", hits: [
     t => tone(t, { f0: 150, f1: 45, drop: 0.08, dur: 0.9, vol: 1 }),
     t => { tone(t, { type: "triangle", f0: 185, dur: 0.15, vol: 0.5 });
            tone(t, { f0: 330, dur: 0.1, vol: 0.3 });
@@ -306,7 +433,7 @@ const KITS = [
     t => { metal(t, { hp: 5000, dur: 1.5, vol: 0.25 });
            noise(t, { freq: 6000, dur: 1.2, vol: 0.2 }); },
   ]},
-  { name: "909", hits: [
+  { name: "909", style: "house", hits: [
     t => { tone(t, { f0: 230, f1: 55, drop: 0.04, dur: 0.45, vol: 1 });
            noise(t, { freq: 3000, dur: 0.015, vol: 0.3 }); },  // 909 킥의 '딱' 하는 어택
     t => { tone(t, { type: "triangle", f0: 200, f1: 185, drop: 0.05, dur: 0.12, vol: 0.4 });
@@ -326,7 +453,7 @@ const KITS = [
            metal(t, { hp: 6000, dur: 1.2, vol: 0.15 }); },
   ]},
   // 트랩: 길게 끌리며 내려가는 808 붐 킥, 날카로운 스네어, 롤용 짧은 하이햇
-  { name: "트랩", names: { 7: "스냅", 8: "벨" }, hits: [
+  { name: "트랩", style: "trap", names: { 7: "스냅", 8: "벨" }, hits: [
     t => tone(t, { f0: 160, f1: 42, drop: 0.06, dur: 1.6, vol: 0.9, drive: 3 }),
     t => { tone(t, { type: "triangle", f0: 240, f1: 200, drop: 0.03, dur: 0.1, vol: 0.5 });
            noise(t, { freq: 2000, dur: 0.2, vol: 0.6 }); },
@@ -344,7 +471,7 @@ const KITS = [
            noise(t, { freq: 5000, dur: 1.4, vol: 0.25 }); },
   ]},
   // 빅룸: 페스티벌 EDM. 크고 찌그러진 킥, 두 겹 클랩, 노이즈 스네어
-  { name: "빅룸", names: { 8: "탬버린" }, hits: [
+  { name: "빅룸", style: "house", names: { 8: "탬버\n린" }, hits: [
     t => { tone(t, { f0: 220, f1: 48, drop: 0.07, dur: 0.65, vol: 1, drive: 4 });
            noise(t, { freq: 2500, dur: 0.02, vol: 0.5 }); },
     t => { tone(t, { type: "triangle", f0: 190, f1: 170, drop: 0.05, dur: 0.15, vol: 0.5 });
@@ -362,7 +489,7 @@ const KITS = [
     t => noise(t, { freq: 3000, dur: 2.4, vol: 0.45 }),
   ]},
   // 테크노: 세게 찌그러진 킥, 낮게 우르릉거리는 럼블, 쇳소리 퍼커션
-  { name: "테크노", names: { 5: "럼블", 7: "메탈", 8: "클랭" }, hits: [
+  { name: "테크노", style: "techno", names: { 5: "럼블", 7: "메탈", 8: "클랭" }, hits: [
     t => { tone(t, { f0: 180, f1: 45, drop: 0.05, dur: 0.55, vol: 1, drive: 8 });
            noise(t, { freq: 4000, dur: 0.012, vol: 0.4 }); },
     t => { noise(t, { type: "bandpass", freq: 1800, Q: 0.8, dur: 0.22, vol: 0.9 });
@@ -380,7 +507,7 @@ const KITS = [
            metal(t, { hp: 3000, dur: 1.2, vol: 0.2 }); },
   ]},
   // 80s 신스팝: 모든 소리에 짧게 끊기는 '게이트 리버브', 시몬스 스타일 전자 탐
-  { name: "80s", bus: { gated: true }, names: { 8: "탬버린" }, hits: [
+  { name: "80s", style: "pop", bus: { gated: true }, names: { 8: "탬버\n린" }, hits: [
     t => tone(t, { f0: 130, f1: 50, drop: 0.06, dur: 0.4, vol: 0.9 }),
     t => { tone(t, { type: "triangle", f0: 180, f1: 160, drop: 0.05, dur: 0.12, vol: 0.5 });
            noise(t, { freq: 800, dur: 0.2, vol: 0.7 }); },
@@ -397,7 +524,7 @@ const KITS = [
     t => noise(t, { freq: 5000, dur: 1.6, vol: 0.35 }),
   ]},
   // 로파이: 킷 전체의 고음을 깎고 살짝 찌그러뜨려 먹먹하고 따뜻하게
-  { name: "로파이", bus: { lp: 3200, drive: 1.5 }, names: { 8: "쉐이커", 9: "라이드" }, hits: [
+  { name: "로파이", style: "boombap", bus: { lp: 3200, drive: 1.5 }, names: { 8: "쉐이\n커", 9: "라이\n드" }, hits: [
     t => tone(t, { f0: 110, f1: 50, drop: 0.07, dur: 0.5, vol: 0.9 }),
     t => { tone(t, { type: "triangle", f0: 190, dur: 0.1, vol: 0.4 });
            noise(t, { type: "bandpass", freq: 1800, Q: 0.7, dur: 0.22, vol: 0.8 }); },
@@ -413,7 +540,7 @@ const KITS = [
            noise(t, { freq: 6000, dur: 0.6, vol: 0.15 }); },
   ]},
   // 칩튠: 옛날 게임기처럼 사각파·삼각파·노이즈만 쓴다
-  { name: "칩튠", names: { 7: "블립", 8: "코인", 9: "노이즈" }, hits: [
+  { name: "칩튠", style: "chip", names: { 7: "블립", 8: "코인", 9: "노이\n즈" }, hits: [
     t => tone(t, { type: "square", f0: 180, f1: 40, drop: 0.08, dur: 0.15, vol: 1 }),
     t => { noise(t, { freq: 1000, dur: 0.15, vol: 0.5 });
            tone(t, { type: "square", f0: 220, f1: 110, drop: 0.05, dur: 0.08, vol: 0.2 }); },
@@ -431,31 +558,31 @@ const KITS = [
 
 // ================= 효과음 10개 (Shift + Z줄) =================
 const FX = [
-  { short: "라이저", play: t => {   // 드롭 직전에 쭉 올라가는 소리
+  { short: "라이\n저", play: t => {   // 드롭 직전에 쭉 올라가는 소리
       noise(t, { type: "bandpass", freq: 300, sweepTo: 9000, Q: 2, dur: 2.5, vol: 0.5, shape: "rise" });
       tone(t, { type: "sawtooth", f0: 150, f1: 1500, drop: 2.5, dur: 2.5, vol: 0.12, shape: "rise" }); } },
-  { short: "다운", play: t => {     // 다운리프터: 쭉 내려가는 소리
+  { short: "다운", play: t => {        // 다운리프터: 쭉 내려가는 소리
       noise(t, { type: "bandpass", freq: 9000, sweepTo: 200, Q: 2, dur: 2, vol: 0.5 });
       tone(t, { type: "sawtooth", f0: 1500, f1: 100, drop: 2, dur: 2, vol: 0.12 }); } },
-  { short: "임팩트", play: t => {   // 드롭이 터지는 '쿵'
+  { short: "임팩\n트", play: t => {   // 드롭이 터지는 '쿵'
       tone(t, { f0: 90, f1: 30, drop: 1, dur: 2, vol: 1, drive: 2 });
       noise(t, { type: "lowpass", freq: 2000, sweepTo: 200, dur: 1.5, vol: 0.6 }); } },
-  { short: "서브드롭", play: t =>
+  { short: "서브\n드롭", play: t =>
       tone(t, { f0: 70, f1: 28, drop: 1.5, dur: 2, vol: 1 }) },
-  { short: "리버스", play: t => {   // 거꾸로 재생한 심벌처럼 커지다 뚝
+  { short: "리버\n스", play: t => {   // 거꾸로 재생한 심벌처럼 커지다 뚝
       noise(t, { freq: 3000, dur: 1.6, vol: 0.5, shape: "rise" });
       metal(t, { hp: 6000, dur: 1.6, vol: 0.15, shape: "rise" }); } },
-  { short: "스윕", play: t =>       // 필터가 열리는 노이즈
+  { short: "스윕", play: t =>          // 필터가 열리는 노이즈
       noise(t, { type: "lowpass", freq: 200, sweepTo: 14000, Q: 6, dur: 3, vol: 0.35, shape: "rise" }) },
-  { short: "레이저", play: t => {
+  { short: "레이\n저", play: t => {
       tone(t, { type: "square", f0: 2500, f1: 80, drop: 0.3, dur: 0.35, vol: 0.25 });
       tone(t, { type: "sawtooth", f0: 3000, f1: 150, drop: 0.25, dur: 0.3, vol: 0.15 }); } },
-  { short: "에어혼", play: t => {   // 빰-빰-빠암
+  { short: "에어\n혼", play: t => {   // 빰-빰-빠암
       for (const [s, len] of [[0, 0.12], [0.17, 0.12], [0.34, 0.7]])
         for (const det of [0.99, 1, 1.01])
           tone(t + s, { type: "sawtooth", f0: 470 * det, f1: 440 * det, drop: len, dur: len,
                         vol: 0.12, filter: ["lowpass", 2500], shape: "hold" }); } },
-  { short: "사이렌", play: t => {   // 덥 사이렌: 음높이가 빠르게 오르내림
+  { short: "사이\n렌", play: t => {   // 덥 사이렌: 음높이가 빠르게 오르내림
       const o = ctx.createOscillator(), lfo = ctx.createOscillator(), g = ctx.createGain();
       o.type = "square"; o.frequency.value = 700;
       lfo.frequency.value = 4;
@@ -464,7 +591,7 @@ const FX = [
       o.connect(filterNode("lowpass", 2000)).connect(g).connect(out);
       o.start(t); lfo.start(t); o.stop(t + 2); lfo.stop(t + 2);
       track(g, [o, lfo]); } },
-  { short: "스네어롤", play: t => { // 빌드업: 점점 빨라지는 스네어 (지금 킷의 스네어 사용)
+  { short: "스네\n롤", play: t => {   // 빌드업: 점점 빨라지는 스네어 (지금 킷의 스네어 사용)
       out = kitBuses[kitIndex];
       let tt = t, gap = 0.2;
       for (let i = 0; i < 24; i++) { KITS[kitIndex].hits[1](tt); tt += gap; gap = Math.max(0.03, gap * 0.88); } } },
@@ -475,13 +602,13 @@ const FX = [
 // filter.env: [시작 주파수, 걸리는 시간] → 시작 주파수에서 freq로 닫힌다
 // filter.lfo / vibrato: [속도(Hz), 깊이]  amp: a=어택, d=줄어드는 시간, s=유지 비율, r=뗀 뒤 꼬리
 const INSTS = [
-  { key: "Digit1", short: "베이스", name: "신스 베이스", base: 36,
+  { key: "Digit1", short: "베이", name: "신스 베이스", base: 36,
     oscs: [["sawtooth", 1, -8, 1], ["sawtooth", 1, 8, 1], ["square", 0.5, 0, 1]],
     filter: { freq: 400, Q: 6, env: [3000, 0.25] }, amp: { a: 0.005, r: 0.08 }, peak: 0.3 },
   { key: "Digit2", short: "서브", name: "서브 베이스", base: 36,
     oscs: [["sine", 1, 0, 1], ["triangle", 1, 0, 0.15]], pitchEnv: [2, 0.04], drive: 2,
     amp: { a: 0.005, r: 0.15 }, peak: 0.5 },
-  { key: "Digit3", short: "애시드", name: "애시드 베이스 (303)", base: 36,
+  { key: "Digit3", short: "애시", name: "애시드 베이스 (303)", base: 36,
     oscs: [["sawtooth", 1, 0, 1]], filter: { freq: 300, Q: 18, env: [5000, 0.18] }, drive: 3,
     amp: { a: 0.003, r: 0.05 }, peak: 0.25 },
   { key: "Digit4", short: "리스", name: "리스 베이스", base: 36,
@@ -491,7 +618,7 @@ const INSTS = [
     oscs: [["sawtooth", 1, -10, 1, -0.3], ["sawtooth", 1, 0, 1], ["sawtooth", 1, 10, 1, 0.3]],
     filter: { freq: 5000, Q: 1 }, vibrato: [5.5, 10], amp: { a: 0.01, r: 0.2 }, peak: 0.15,
     delay: 0.25, verb: 0.15 },
-  { key: "Digit6", short: "슈퍼쏘", name: "슈퍼쏘", base: 60,
+  { key: "Digit6", short: "슈퍼", name: "슈퍼쏘", base: 60,
     oscs: [-30, -18, -8, 0, 8, 18, 30].map((d, i) => ["sawtooth", 1, d, 1, (i - 3) / 3]),
     filter: { freq: 9000, Q: 0.5 }, amp: { a: 0.01, r: 0.4 }, peak: 0.08, verb: 0.35, delay: 0.15 },
   { key: "Digit7", short: "플럭", name: "플럭", base: 60,
@@ -509,10 +636,8 @@ const INSTS = [
     peak: 0.3, verb: 0.3 },
 ];
 
-// 누르는 동안 울리고(noteOn), 떼면 꺼진다(noteOff)
-function noteOn(code, midi) {
-  const def = INSTS[inst];
-  const t = ctx.currentTime;
+// 악기(def) 하나로 음 하나를 t 시각에 시작한다. 끌 때는 stopVoice
+function startVoice(def, midi, t) {
   const f = 440 * Math.pow(2, (midi - 69) / 12);
   const amp = ctx.createGain();
   const srcs = [];
@@ -585,19 +710,196 @@ function noteOn(code, midi) {
   if (def.delay) amp.connect(gainNode(def.delay)).connect(delayIn);
 
   const v = track(amp, srcs);
-  v.release = r;
-  held.set(code, v);
+  Object.assign(v, { start: t, attack: a, release: r });
+  return v;
 }
 
-function noteOff(code) {
-  const v = held.get(code);
-  if (!v) return;
-  held.delete(code);
-  const t = ctx.currentTime;
+// t 시각부터 꼬리(release)를 남기며 줄어든다. 어택이 끝나기 전에는 끄지 않는다
+function stopVoice(v, t) {
+  t = Math.max(t, v.start + v.attack);
   v.g.gain.cancelScheduledValues(t);
-  v.g.gain.setValueAtTime(v.g.gain.value, t);
-  v.g.gain.linearRampToValueAtTime(0, t + v.release);
-  v.srcs.forEach(s => s.stop(t + v.release + 0.01));
+  v.g.gain.setTargetAtTime(0, t, v.release / 4);
+  v.srcs.forEach(s => { try { s.stop(t + v.release * 1.5); } catch (e) {} });
+}
+
+// ================= 시퀀서: 1마디 16스텝 루프 =================
+// 소리는 Web Audio 시계로 0.12초 앞까지 미리 예약한다 (setTimeout만으로는 박자가 흔들린다)
+const STEPS = 16;
+let bpm = 128, playing = false, recording = false, metronome = true;
+let events = [];            // 녹음된 소리: {kind: drum|fx|note, step, kit, idx, def, midi, len, recAt}
+let nextStep = 0, nextStepTime = 0, timer = null;
+let playStep = -1;          // 화면에 표시 중인 재생 위치
+const stepQueue = [];       // 예약한 스텝과 시각 (화면 재생 위치를 소리에 맞추려고)
+const recNotes = new Map(); // 녹음 중 누르고 있는 건반 code → 이벤트 (뗄 때 길이 기록)
+
+const stepDur = () => 60 / bpm / 4;
+// 귀에 들리는 소리는 출력 지연만큼 늦다. 녹음할 때 이만큼 빼서 기록한다
+const latency = () => (ctx.outputLatency || 0) + (ctx.baseLatency || 0);
+
+function startPlay() {
+  if (!ctx || ctx.state !== "running" || playing) return;
+  playing = true;
+  nextStep = 0;
+  nextStepTime = ctx.currentTime + 0.05;
+  timer = setInterval(schedule, 25);
+  schedule();
+  requestAnimationFrame(tickPlayhead);
+}
+
+function stopPlay() {
+  playing = false;
+  recording = false;
+  clearInterval(timer);
+  stepQueue.length = 0;
+  playStep = -1;
+  recNotes.clear();
+  renderGrid();
+}
+
+function schedule() {
+  // 화면이 꺼졌다 돌아오면 밀린 박자를 한꺼번에 치지 않고 지금부터 다시 시작
+  if (nextStepTime < ctx.currentTime - 0.2) nextStepTime = ctx.currentTime + 0.05;
+  while (nextStepTime < ctx.currentTime + 0.12) {
+    playStepAt(nextStep, nextStepTime);
+    stepQueue.push({ step: nextStep, time: nextStepTime });
+    nextStepTime += stepDur();
+    nextStep = (nextStep + 1) % STEPS;
+  }
+}
+
+function playStepAt(step, t) {
+  if (metronome && step % 4 === 0) click(t, step === 0);
+  for (const ev of events) {
+    if (ev.step !== step) continue;
+    // 방금 손으로 친 소리가 같은 바퀴에서 또 울리지 않게
+    if (ev.recAt !== undefined && Math.abs(ev.recAt - t) < stepDur() / 2) continue;
+    playEvent(ev, t);
+  }
+}
+
+function playEvent(ev, t) {
+  if (ev.kind === "drum") { out = kitBuses[ev.kit]; KITS[ev.kit].hits[ev.idx](t); }
+  else if (ev.kind === "fx") { out = fxBus; FX[ev.idx].play(t); }
+  else stopVoice(startVoice(ev.def, ev.midi, t), t + ev.len * stepDur());
+}
+
+// 메트로놈: 한 박마다 '틱', 마디 첫 박은 높게
+function click(t, accent) {
+  out = master;
+  tone(t, { type: "square", f0: accent ? 1800 : 1200, dur: 0.03, vol: 0.12 });
+}
+
+// 지금 들리는 위치를 가장 가까운 16분음표로 맞춘다 → {step, at(그 스텝의 시각)}
+function quantize() {
+  const k = Math.round((ctx.currentTime - latency() - nextStepTime) / stepDur());
+  return { step: (((nextStep + k) % STEPS) + STEPS) % STEPS, at: nextStepTime + k * stepDur() };
+}
+
+function record(ev) {
+  if (!recording || !playing) return null;
+  const q = quantize();
+  ev.step = q.step;
+  ev.recAt = q.at;
+  events.push(ev);
+  renderGrid();
+  return ev;
+}
+
+// 화면의 재생 위치: 예약해 둔 스텝이 실제로 들릴 때 옮긴다
+function tickPlayhead() {
+  if (!playing) return;
+  requestAnimationFrame(tickPlayhead);
+  let moved = false;
+  while (stepQueue.length && stepQueue[0].time + (ctx.outputLatency || 0) <= ctx.currentTime) {
+    playStep = stepQueue.shift().step;
+    moved = true;
+  }
+  if (moved) renderGrid();
+}
+
+function setBpm(v) {
+  bpm = Math.max(60, Math.min(200, v));
+  if (delayNode) delayNode.delayTime.setTargetAtTime(delayTimeForBpm(), ctx.currentTime, 0.05);
+}
+
+// ================= 랜덤 (Q) =================
+// Mutable Instruments Grids에서 착안: 완전 무작위가 아니라 장르마다 '이 자리에 칠 확률' 지도를 두고 굴린다
+const ALL = [...Array(16).keys()];
+const EVEN = ALL.filter(i => i % 2 === 0), ODD = ALL.filter(i => i % 2 === 1);
+// [드럼 자리, 스텝들, 확률]. 자리: 0킥 1스네어 2클랩 3닫힌HH 4열린HH 5로우탐 6하이탐 7림 8퍼커션 9크래시
+const STYLES = {
+  house:   { bass: [2, 6, 10, 14], drums: [[0, [0, 4, 8, 12], 1], [2, [4, 12], 0.95], [3, ALL, 0.4], [4, [2, 6, 10, 14], 0.9],
+            [7, [3, 7, 11, 15], 0.25], [8, ALL, 0.08], [5, [13, 15], 0.15], [9, [0], 0.25]] },
+  techno:  { bass: [2, 6, 10, 14, 3, 11], drums: [[0, [0, 4, 8, 12], 1], [1, [4, 12], 0.5], [2, [4, 12], 0.4], [3, ALL, 0.6],
+            [4, [2, 6, 10, 14], 0.8], [5, [2, 3, 6, 7, 10, 11, 14, 15], 0.35], [7, ALL, 0.15], [8, ALL, 0.1]] },
+  trap:    { bass: "kick", drums: [[0, [0], 1], [0, [3, 6, 7, 10, 11, 14], 0.3], [1, [8], 1], [2, [8], 0.6], [3, EVEN, 1],
+            [3, ODD, 0.35], [4, [14], 0.3], [7, [4, 12], 0.3], [8, ALL, 0.06], [5, [13, 15], 0.2]] },
+  hiphop:  { bass: "kick", drums: [[0, [0, 10], 0.95], [0, [3, 7, 13], 0.3], [1, [4, 12], 1], [3, EVEN, 0.9], [4, [14], 0.3],
+            [7, ODD, 0.1], [8, ALL, 0.05]] },
+  boombap: { bass: [0, 3, 6, 8, 10, 13], drums: [[0, [0, 10], 0.95], [0, [7, 13], 0.35], [1, [4, 12], 1], [3, EVEN, 0.85],
+            [3, ODD, 0.15], [8, ALL, 0.3], [9, EVEN, 0.15]] },
+  pop:     { bass: [0, 2, 4, 6, 8, 10, 12, 14], drums: [[0, [0, 8], 1], [0, [6, 10], 0.3], [1, [4, 12], 1], [3, EVEN, 0.95],
+            [4, [14], 0.3], [8, [4, 12], 0.6], [5, [14, 15], 0.35], [6, [12, 13], 0.35]] },
+  chip:    { bass: [0, 2, 4, 6, 8, 10, 12, 14], drums: [[0, [0, 8], 1], [0, [6, 11], 0.3], [1, [4, 12], 1], [3, EVEN, 0.8],
+            [7, ALL, 0.1], [8, [15], 0.15], [5, [13, 14, 15], 0.2]] },
+};
+// 장르별 기본 베이스 악기 (지금 고른 악기가 베이스 묶음 1~4면 그걸 쓴다)
+const STYLE_BASS = { house: 0, techno: 2, trap: 1, hiphop: 1, boombap: 0, pop: 0, chip: 7 };
+const MINOR = [0, 2, 3, 5, 7, 8, 10];
+
+function randomBeat() {
+  const kit = KITS[kitIndex], st = STYLES[kit.style];
+  events = [];
+  const kicks = [];
+  for (const [idx, steps, p] of st.drums) {
+    for (const step of steps) {
+      if (Math.random() >= p) continue;
+      if (events.some(e => e.idx === idx && e.step === step)) continue;
+      events.push({ kind: "drum", kit: kitIndex, idx, step });
+      if (idx === 0) kicks.push(step);
+    }
+  }
+  // 베이스: 장르가 정한 자리(또는 킥 자리)에, 근음 위주로 단조 음계에서 고른다
+  const def = inst >= 0 && inst <= 3 ? INSTS[inst] : INSTS[STYLE_BASS[kit.style]];
+  const root = [0, 2, 5, 7, 9][Math.floor(Math.random() * 5)];
+  const slots = (st.bass === "kick" ? kicks : st.bass).filter(() => Math.random() < 0.8).sort((x, y) => x - y);
+  slots.forEach((step, i) => {
+    const r = Math.random();
+    const deg = r < 0.5 ? 0 : r < 0.7 ? 7 : r < 0.8 ? 12 : MINOR[Math.floor(Math.random() * MINOR.length)];
+    // 트랩·힙합은 다음 음까지 길게 끌고, 나머지는 짧게
+    const next = slots[i + 1] !== undefined ? slots[i + 1] : slots[0] + STEPS;
+    const len = st.bass === "kick" ? Math.min(8, next - step) : 1 + (Math.random() < 0.3 ? 1 : 0);
+    events.push({ kind: "note", def, midi: 36 + root + deg, len, step });
+  });
+  if (!playing) startPlay();
+  renderGrid();
+}
+
+// Shift+Q: 매번 새로운 합성 음색을 만들어 지금 악기로 바꾸고 한 번 들려준다
+let randomCount = 0;
+function randomTone() {
+  const rnd = (lo, hi) => lo + Math.random() * (hi - lo);
+  const pick = arr => arr[Math.floor(Math.random() * arr.length)];
+  const n = 1 + Math.floor(Math.random() * 3);
+  const oscs = [];
+  for (let i = 0; i < n; i++)
+    oscs.push([pick(["sawtooth", "square", "triangle", "sine"]), pick([0.5, 1, 1, 1, 2]), rnd(-25, 25), 1, rnd(-0.6, 0.6)]);
+  const def = { short: "랜덤", name: "랜덤 음색 " + (++randomCount), base: pick([36, 48, 60, 60]), oscs,
+                amp: { a: pick([0.002, 0.01, 0.05, 0.3]), r: rnd(0.05, 0.8) }, peak: 0.25 / Math.sqrt(n) };
+  if (Math.random() < 0.8) def.filter = { freq: rnd(300, 5000), Q: rnd(0.5, 12) };
+  if (def.filter && Math.random() < 0.6) def.filter.env = [rnd(2000, 9000), rnd(0.05, 0.5)];
+  if (def.filter && Math.random() < 0.3) def.filter.lfo = [rnd(0.2, 6), rnd(100, 800)];
+  if (Math.random() < 0.4) { def.amp.d = rnd(0.1, 1); def.amp.s = rnd(0, 0.6); }
+  if (Math.random() < 0.25) def.vibrato = [rnd(3, 7), rnd(5, 30)];
+  if (Math.random() < 0.25) def.fm = [pick([0.5, 1, 2, 3.5]), rnd(0.5, 4), rnd(0.2, 1.5)];
+  if (Math.random() < 0.3) def.drive = pick([2, 4, 8]);
+  if (Math.random() < 0.2) def.pitchEnv = [rnd(1.5, 4), rnd(0.02, 0.15)];
+  if (Math.random() < 0.6) def.verb = rnd(0.1, 0.5);
+  if (Math.random() < 0.4) def.delay = rnd(0.1, 0.35);
+  randomDef = def;
+  inst = -1;
+  const t = ctx.currentTime;
+  stopVoice(startVoice(def, def.base + octave * 12, t), t + 0.35);
 }
 
 // ================= 키 입력 =================
@@ -610,18 +912,31 @@ function onKeyDown(e) {
 
   const instIdx = INSTS.findIndex(i => i.key === code);
   const d = DRUM_KEYS.indexOf(code);
+  const ready = ctx && ctx.state === "running";
   if (instIdx >= 0) inst = instIdx;
   else if (code === "ArrowRight") kitIndex = (kitIndex + 1) % KITS.length;
   else if (code === "ArrowLeft") kitIndex = (kitIndex + KITS.length - 1) % KITS.length;
   else if (code === "ArrowUp") octave = Math.min(OCT_MAX, octave + 1);
   else if (code === "ArrowDown") octave = Math.max(OCT_MIN, octave - 1);
   else if (code === "Backquote") toggleViz();
-  else if (ctx && ctx.state === "running") {
+  else if (code === "Minus") setBpm(bpm - (e.shiftKey ? 5 : 1));
+  else if (code === "Equal") setBpm(bpm + (e.shiftKey ? 5 : 1));
+  else if (code === "Tab") metronome = !metronome;
+  else if (code === "Backspace") { if (e.shiftKey) events = []; else events.pop(); renderGrid(); }
+  else if (ready) {
     const t = ctx.currentTime;
-    if (d >= 0 && e.shiftKey) { out = fxBus; FX[d].play(t); }
-    else if (d >= 0) { out = kitBuses[kitIndex]; KITS[kitIndex].hits[d](t); }
-    else if (code in NOTE_KEYS) noteOn(code, INSTS[inst].base + octave * 12 + NOTE_KEYS[code]);
-    else if (code === "Escape") stopAll();
+    if (d >= 0 && e.shiftKey) { out = fxBus; FX[d].play(t); record({ kind: "fx", idx: d }); }
+    else if (d >= 0) { out = kitBuses[kitIndex]; KITS[kitIndex].hits[d](t); record({ kind: "drum", kit: kitIndex, idx: d }); }
+    else if (code in NOTE_KEYS) {
+      const def = curDef(), midi = def.base + octave * 12 + NOTE_KEYS[code];
+      held.set(code, startVoice(def, midi, t));
+      const ev = record({ kind: "note", def, midi, len: 1 });
+      if (ev) recNotes.set(code, ev);
+    }
+    else if (code === "KeyQ") { if (e.shiftKey) randomTone(); else randomBeat(); }
+    else if (code === "Space") { if (playing) stopPlay(); else startPlay(); }
+    else if (code === "Enter") { if (!playing) { startPlay(); recording = true; } else recording = !recording; }
+    else if (code === "Escape") { stopAll(); stopPlay(); }
   }
   render();
 }
@@ -630,7 +945,15 @@ function onKeyUp(e) {
   if (e.metaKey) return;
   e.preventDefault();
   pressed.delete(e.code);
-  if (ctx) noteOff(e.code);
+  // 녹음 중이던 건반이면 누른 길이를 16분음표 단위로 기록
+  const ev = recNotes.get(e.code);
+  if (ev) {
+    recNotes.delete(e.code);
+    ev.len = Math.max(1, Math.min(STEPS, Math.round((ctx.currentTime - latency() - ev.recAt) / stepDur())));
+    renderGrid();
+  }
+  const v = held.get(e.code);
+  if (v) { held.delete(e.code); stopVoice(v, ctx.currentTime); }
   render();
 }
 
@@ -672,6 +995,7 @@ function toggleViz() {
     canvas.height = window.innerHeight * dpr;
     requestAnimationFrame(drawViz);
   }
+  render();
 }
 $("viz").addEventListener("click", toggleViz);  // 키보드가 끊겼을 때를 대비해 화면을 탭해도 꺼진다
 
@@ -720,26 +1044,60 @@ const ROWS = [
    ["Comma",","],["Period","."],["Slash","/"]],
 ];
 
-// 안내도는 한 번만 만들고, 이후에는 글자와 강조만 바꾼다
+// 안내도와 격자는 한 번만 만들고, 이후에는 글자와 클래스만 바꾼다
 const keyEls = {};
-for (const row of ROWS) {
+ROWS.forEach((row, ri) => {
   const r = document.createElement("div");
-  r.className = "kr";
+  r.className = "kr r" + ri;
   for (const [code, ch] of row) {
     const k = document.createElement("div");
-    k.className = "k";
     k.innerHTML = "<b></b><span></span>";
     k.firstChild.textContent = ch;
     r.appendChild(k);
     keyEls[code] = k;
   }
   $("kb").appendChild(r);
+});
+
+const cells = [];
+for (let n = 0; n < 11 * STEPS; n++) {
+  const el = document.createElement("div");
+  $("grid").appendChild(el);
+  cells.push(el);
+}
+
+// 격자: 위 10줄 = 드럼 자리(Z줄 순서), 맨 아래 1줄 = 멜로디
+function renderGrid() {
+  const m = Array.from({ length: 11 }, () => new Array(STEPS).fill(""));
+  for (const ev of events) {
+    if (ev.kind === "note") {
+      for (let i = ev.len - 1; i >= 0; i--) m[10][(ev.step + i) % STEPS] = i ? "mel tail" : "mel";
+    } else if (m[ev.idx][ev.step] !== "fx") {
+      m[ev.idx][ev.step] = ev.kind === "fx" ? "fx" : "hit";
+    }
+  }
+  cells.forEach((el, n) => {
+    const r = Math.floor(n / STEPS), c = n % STEPS;
+    let cls = "c";
+    if (c % 4 === 0) cls += " down";
+    if (c % 4 === 3 && c < STEPS - 1) cls += " gap";
+    if (r === 10) cls += " melrow";
+    if (c === playStep) cls += " ph";
+    if (m[r][c]) cls += " " + m[r][c];
+    el.className = cls;
+  });
+}
+
+function octText(short) {
+  const def = curDef();
+  const sign = octave > 0 ? "+" : "";
+  const note = LETTER_NAMES[0] + (Math.floor((def.base + octave * 12) / 12) - 1);
+  return short ? `${sign}${octave} · ${note}` : `${sign}${octave} (A = ${note})`;
 }
 
 function render() {
   const kit = KITS[kitIndex];
   const shiftHeld = pressed.has("ShiftLeft") || pressed.has("ShiftRight");
-  const baseMidi = INSTS[inst].base + octave * 12;
   for (const code in keyEls) {
     const k = keyEls[code];
     let label = "", cls = "k";
@@ -752,28 +1110,49 @@ function render() {
       label = NOTE_NAMES[n];
       cls += NOTE_NAMES[n].includes("#") ? " black" : " white";
     }
-    else if (instIdx >= 0) { label = INSTS[instIdx].short; cls += " inst"; if (instIdx === inst) cls += " sel"; }
-    else if (code === "Backquote") { label = "시각화"; cls += " func"; if (vizOn) cls += " sel"; }
+    else if (instIdx >= 0) {
+      label = INSTS[instIdx].short;
+      cls += " inst" + (instIdx <= 3 ? " bass" : "") + (instIdx === inst ? " sel" : "");
+    }
+    else if (code === "Backquote") { label = "파형"; cls += " func" + (vizOn ? " sel" : ""); }
+    else if (code === "KeyQ") { label = shiftHeld ? "음\n색" : "랜\n덤"; cls += " func" + (inst === -1 ? " sel" : ""); }
+    else if (code === "Minus") { label = shiftHeld ? "−5" : "BPM−"; cls += " func"; }
+    else if (code === "Equal") { label = shiftHeld ? "+5" : "BPM+"; cls += " func"; }
     if (pressed.has(code)) cls += " on";
     k.className = cls;
     k.lastChild.textContent = label;
   }
-  const sign = octave > 0 ? "+" : "";
-  const octText = `${sign}${octave} (A = ${LETTER_NAMES[0]}${Math.floor(baseMidi / 12) - 1})`;
-  $("inst").textContent = `${(inst + 1) % 10} ${INSTS[inst].name}`;
-  $("kit").textContent = `${kit.name} (${kitIndex + 1}/${KITS.length})`;
-  $("oct").textContent = octText;
-  $("state").textContent = ctx ? ctx.state : "시작 전";
-  $("pressed").textContent = pressed.size ? [...pressed].join(", ") : "(없음)";
-  $("vizInfo").textContent = ctx
-    ? `${INSTS[inst].name} · 킷 ${kit.name} · 옥타브 ${octText}  —  \` 또는 탭하면 닫기`
-    : "먼저 시작 버튼을 눌러 주세요  —  ` 또는 탭하면 닫기";
-  if (ctx) {
-    $("start").textContent = ctx.state === "running" ? "소리 켜짐" : "다시 켜기 (" + ctx.state + ")";
-    $("start").classList.toggle("on", ctx.state === "running");
-  }
+
+  const def = curDef();
+  const num = inst === -1 ? "R" : String((inst + 1) % 10);
+  const color = inst === -1 ? "var(--txt)" : inst <= 3 ? "var(--bass)" : "var(--mel)";
+  $("instNum").textContent = num;
+  $("instNum").style.color = color;
+  $("instName").textContent = def.name;
+  $("kit").textContent = `${kit.name} ${kitIndex + 1}/${KITS.length}`;
+  $("oct").textContent = octText(false);
+  $("vNum").textContent = num;
+  $("vNum").style.color = color;
+  $("vName").textContent = def.name;
+  $("vKit").textContent = kit.name;
+  $("vOct").textContent = octText(true);
+
+  const on = !!ctx && ctx.state === "running";
+  $("dot").classList.toggle("on", on);
+  $("stateTxt").textContent = "오디오 " + (on ? "켜짐" : "꺼짐");
+  $("start").style.display = on ? "none" : "flex";
+  $("start").querySelector(".st-sub").textContent = ctx ? "탭해서 다시 켜기" : "탭해서 소리 켜기";
+  $("seq").style.display = on ? "flex" : "none";
+
+  $("bpm").textContent = bpm;
+  $("chipPlay").textContent = playing ? "▶ 재생" : "■ 정지";
+  $("chipPlay").classList.toggle("on", playing);
+  $("chipRec").classList.toggle("on", recording);
+  $("chipMet").classList.toggle("on", metronome);
+  $("shiftChip").classList.toggle("on", shiftHeld);
 }
 render();
+renderGrid();
 </script>
 </body>
 </html>
