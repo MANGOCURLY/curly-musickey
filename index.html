@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Curly MusicKey — 키보드 테스트</title>
+<style>
+  body { margin: 0; padding: 12px; background: #111; color: #eee;
+         font: 18px/1.4 -apple-system, system-ui, sans-serif; }
+  h1 { font-size: 22px; margin: 0 0 8px; }
+  p { margin: 4px 0; color: #aaa; font-size: 15px; }
+  button { width: 100%; font-size: 22px; padding: 16px; margin: 8px 0;
+           border: 0; border-radius: 10px; background: #2d6cdf; color: #fff; }
+  button#start.on { background: #2a7a3a; }
+  .box { background: #1c1c1c; border-radius: 8px; padding: 10px; margin: 8px 0; }
+  .big { font-size: 26px; font-weight: bold; word-break: break-all; }
+  .row { display: flex; justify-content: space-between; gap: 8px; }
+  .mods span { display: inline-block; padding: 2px 8px; margin: 2px; border-radius: 6px; background: #333; color: #777; }
+  .mods span.on { background: #e0a800; color: #000; }
+  pre { margin: 0; white-space: pre-wrap; word-break: break-all; font-size: 13px; }
+  #log { font-family: ui-monospace, Menlo, monospace; font-size: 13px; white-space: pre-wrap; word-break: break-all; }
+  #copyOut { display: none; user-select: text; -webkit-user-select: text; }
+</style>
+</head>
+<body>
+<h1>Curly MusicKey — 키보드 테스트</h1>
+<p>1) "시작"을 누르세요. 2) K380 키를 하나씩, 그리고 여러 개를 동시에 눌러 보세요. 3) "결과 복사"로 결과를 가져가세요.</p>
+
+<button id="start">시작 (소리 켜기)</button>
+
+<div class="box">
+  <div class="row"><span>code</span><span id="code" class="big">-</span></div>
+  <div class="row"><span>key</span><span id="key" class="big">-</span></div>
+  <div class="row"><span>repeat</span><span id="repeat">-</span></div>
+  <div class="row"><span>isComposing</span><span id="composing">-</span></div>
+  <div class="mods">
+    <span id="m-shift">shift</span><span id="m-ctrl">ctrl</span><span id="m-alt">alt</span><span id="m-meta">meta</span>
+  </div>
+</div>
+
+<div class="box">
+  <div>지금 눌린 키: <span id="pressed">(없음)</span></div>
+  <div>최대 동시 입력 수: <span id="maxSim" class="big">0</span></div>
+</div>
+
+<div class="box">
+  <div>최근 이벤트 20개</div>
+  <div id="log"></div>
+</div>
+
+<div class="box">
+  <div>환경 정보</div>
+  <pre id="env"></pre>
+</div>
+
+<button id="copy">결과 복사</button>
+<div class="box" id="copyOut">
+  <p>자동 복사에 실패했습니다. 아래 글을 길게 눌러 직접 복사하세요.</p>
+  <pre id="copyText"></pre>
+</div>
+
+<script>
+// ---------- 상태 ----------
+let ctx = null;                 // AudioContext (시작 버튼 후 생성)
+const pressed = new Set();      // 지금 눌려 있는 키
+let maxSim = 0;                 // 최대 동시 입력 수
+const seenCodes = new Set();    // 한 번이라도 인식된 code
+const emptyCodeKeys = new Set();// code가 빈 값이었던 이벤트의 key
+let composingCount = 0;         // isComposing 또는 key==="Process" 횟수 (keydown 기준)
+const log = [];                 // 최근 이벤트 20개
+const t0 = performance.now();
+
+const $ = id => document.getElementById(id);
+
+// ---------- 소리 ----------
+// code 문자열로 0~35 사이 숫자를 만들어, 220Hz부터 반음씩 올린 음을 낸다.
+function pitchFor(name) {
+  let h = 0;
+  for (const ch of name) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return 220 * Math.pow(2, (h % 36) / 12);
+}
+
+function beep(name) {
+  if (!ctx || ctx.state !== "running") return;
+  const t = ctx.currentTime;
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.type = "square";
+  osc.frequency.value = pitchFor(name);
+  gain.gain.setValueAtTime(0.2, t);
+  gain.gain.exponentialRampToValueAtTime(0.001, t + 0.12);
+  osc.connect(gain).connect(ctx.destination);
+  osc.start(t);
+  osc.stop(t + 0.13);
+}
+
+$("start").addEventListener("click", async () => {
+  // iOS 무음 스위치가 켜져 있어도 소리가 나도록 (지원하는 브라우저만)
+  if (navigator.audioSession) {
+    try { navigator.audioSession.type = "playback"; } catch (e) {}
+  }
+  if (!ctx) {
+    ctx = new (window.AudioContext || window.webkitAudioContext)();
+    ctx.addEventListener("statechange", renderEnv);
+  }
+  await ctx.resume();
+  $("start").textContent = "소리 켜짐 (" + ctx.state + ")";
+  $("start").classList.add("on");
+  $("start").blur();  // 버튼에 포커스가 남으면 Space/Enter가 버튼을 누르게 됨
+  renderEnv();
+  beep("start");
+});
+
+// ---------- 키 이벤트 ----------
+function onKey(e) {
+  const down = e.type === "keydown";
+  const id = e.code || ("(빈 code) " + e.key);
+
+  if (e.code) seenCodes.add(e.code);
+  else emptyCodeKeys.add(e.key);
+
+  if (down) {
+    if (e.isComposing || e.key === "Process") composingCount++;
+    pressed.add(id);
+    if (pressed.size > maxSim) maxSim = pressed.size;
+    if (!e.repeat) beep(id);
+  } else {
+    pressed.delete(id);
+  }
+
+  // Cmd 조합은 막지 않는다 (iOS/맥 시스템 단축키는 어차피 못 막고, 새로고침 등은 남겨 둠)
+  if (!e.metaKey) e.preventDefault();
+
+  // 화면 갱신
+  $("code").textContent = JSON.stringify(e.code);
+  $("key").textContent = JSON.stringify(e.key);
+  $("repeat").textContent = e.repeat;
+  $("composing").textContent = e.isComposing;
+  $("m-shift").classList.toggle("on", e.shiftKey);
+  $("m-ctrl").classList.toggle("on", e.ctrlKey);
+  $("m-alt").classList.toggle("on", e.altKey);
+  $("m-meta").classList.toggle("on", e.metaKey);
+  $("pressed").textContent = pressed.size ? [...pressed].join(", ") : "(없음)";
+  $("maxSim").textContent = maxSim;
+
+  const ms = Math.round(performance.now() - t0);
+  log.unshift(`${ms}ms ${down ? "↓" : "↑"} code=${JSON.stringify(e.code)} key=${JSON.stringify(e.key)}`
+              + (e.repeat ? " R" : "") + (e.isComposing ? " C" : ""));
+  if (log.length > 20) log.pop();
+  $("log").textContent = log.join("\n");
+
+  renderEnv();
+}
+window.addEventListener("keydown", onKey);
+window.addEventListener("keyup", onKey);
+
+// ---------- 환경 정보 ----------
+function envText() {
+  const lines = ["userAgent: " + navigator.userAgent];
+  if (!ctx) {
+    lines.push("AudioContext: 아직 시작 안 함");
+  } else {
+    lines.push("AudioContext 상태: " + ctx.state);
+    lines.push("sampleRate: " + ctx.sampleRate);
+    if (ctx.baseLatency !== undefined) lines.push("baseLatency: " + ctx.baseLatency + " s");
+    if (ctx.outputLatency !== undefined) lines.push("outputLatency: " + ctx.outputLatency + " s");
+  }
+  lines.push("audioSession 지원: " + (navigator.audioSession ? "예 (" + navigator.audioSession.type + ")" : "아니오"));
+  return lines.join("\n");
+}
+function renderEnv() { $("env").textContent = envText(); }
+renderEnv();
+
+// ---------- 결과 복사 ----------
+function resultText() {
+  return [
+    "Curly MusicKey 키보드 테스트 결과",
+    "시각: " + new Date().toISOString(),
+    "",
+    `인식된 code (${seenCodes.size}개): ` + ([...seenCodes].join(", ") || "(없음)"),
+    "code가 빈 이벤트의 key: " + ([...emptyCodeKeys].map(k => JSON.stringify(k)).join(", ") || "(없음)"),
+    "isComposing=true 또는 key=\"Process\" 횟수 (keydown 기준): " + composingCount,
+    "최대 동시 입력 수: " + maxSim,
+    "",
+    "[환경]",
+    envText(),
+  ].join("\n");
+}
+
+$("copy").addEventListener("click", async () => {
+  $("copy").blur();
+  const text = resultText();
+  try {
+    await navigator.clipboard.writeText(text);
+    $("copy").textContent = "복사됨 ✓ (다시 누르면 새로 복사)";
+    $("copyOut").style.display = "none";
+  } catch (e) {
+    $("copy").textContent = "복사 실패 — 아래 글을 직접 복사하세요";
+    $("copyText").textContent = text;
+    $("copyOut").style.display = "block";
+  }
+});
+</script>
+</body>
+</html>
