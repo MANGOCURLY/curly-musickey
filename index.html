@@ -14,7 +14,7 @@
   button.on { background: #2a7a3a; }
   .box { background: #1c1c1c; border-radius: 8px; padding: 10px; margin: 8px 0; }
   .row { display: flex; justify-content: space-between; gap: 8px; }
-  .big { font-size: 22px; font-weight: bold; }
+  .big { font-size: 20px; font-weight: bold; }
   /* 키 배치 안내도: 한 줄 최대 13키, 실제 키보드처럼 줄마다 조금씩 오른쪽으로 */
   .kb { margin: 8px 0; }
   .kr { display: flex; gap: 0.5%; margin-bottom: 4px; }
@@ -26,12 +26,20 @@
        display: flex; flex-direction: column; justify-content: center; }
   .k b { font-size: 13px; color: #ccc; }
   .k span { font-size: 9px; line-height: 1.1; word-break: break-all; }
-  .k.drum { background: #3a2a1a; }
+  .k.drum { background: #3a2a1a; } .k.drum span { color: #e8b27a; }
+  .k.fx { background: #3a1f4a; } .k.fx span { color: #d9a8ff; }
+  .k.inst { background: #1a2a40; } .k.inst span { color: #8fb8ff; }
+  .k.func { background: #1f3a2a; } .k.func span { color: #8fe0b0; }
   .k.white { background: #e8e8e8; } .k.white b, .k.white span { color: #111; }
   .k.black { background: #444; } .k.black span { color: #eee; }
   .k.sel { outline: 2px solid #2d6cdf; }
   .k.on { background: #e0a800 !important; }
   .k.on b, .k.on span { color: #000 !important; }
+  /* 시각화: 화면 전체를 덮는다 */
+  #viz { position: fixed; inset: 0; background: #000; display: none; z-index: 10; }
+  #viz canvas { width: 100%; height: 100%; display: block; }
+  #vizInfo { position: absolute; left: 0; right: 0; bottom: 16px; text-align: center;
+             color: #777; font-size: 14px; }
 </style>
 </head>
 <body>
@@ -39,7 +47,7 @@
 <button id="start">시작 (소리 켜기)</button>
 
 <div class="box">
-  <div class="row"><span>멜로디 악기</span><span id="inst" class="big">-</span></div>
+  <div class="row"><span>악기</span><span id="inst" class="big">-</span></div>
   <div class="row"><span>드럼 킷</span><span id="kit" class="big">-</span></div>
   <div class="row"><span>옥타브</span><span id="oct" class="big">-</span></div>
   <div class="row"><span>오디오</span><span id="state">시작 전</span></div>
@@ -47,14 +55,18 @@
 </div>
 
 <div class="kb" id="kb"></div>
-<p>Z줄 = 드럼 · A줄/Q줄 = 건반 · 1 베이스 / 2 리드<br>
-   ←→ 드럼 킷 전환 · ↑↓ 옥타브 · Esc 모든 소리 끄기</p>
+<p>Z줄 = 드럼 · <b>Shift 누른 채 Z줄 = 효과음</b><br>
+   A줄/Q줄 = 건반 · 숫자 1~0 = 악기 선택<br>
+   ←→ 드럼 킷 · ↑↓ 옥타브 · ` 시각화 · Esc 모든 소리 끄기</p>
+
+<div id="viz"><canvas id="vizCanvas"></canvas><div id="vizInfo"></div></div>
 
 <script>
 // ================= 키 배치 =================
 const DRUM_KEYS = ["KeyZ","KeyX","KeyC","KeyV","KeyB","KeyN","KeyM","Comma","Period","Slash"];
+// 드럼 자리별 역할. 킷이 바뀌어도 같은 자리는 같은 역할 (Z = 항상 킥)
 const DRUM_NAMES = ["킥","스네어","클랩","닫힌HH","열린HH","로우탐","하이탐","림","카우벨","크래시"];
-// 건반: code → A키의 도(0)에서 몇 반음 위인지
+// 건반: code → A키의 도(0)에서 몇 반음 위인지 (에이블톤/로직의 컴퓨터 키보드 연주 배치)
 const NOTE_KEYS = {
   KeyA: 0, KeyW: 1, KeyS: 2, KeyE: 3, KeyD: 4, KeyF: 5, KeyT: 6, KeyG: 7,
   KeyY: 8, KeyH: 9, KeyU: 10, KeyJ: 11, KeyK: 12, KeyO: 13, KeyL: 14,
@@ -62,14 +74,14 @@ const NOTE_KEYS = {
 };
 const NOTE_NAMES = ["도","도#","레","레#","미","파","파#","솔","솔#","라","라#","시"];
 const LETTER_NAMES = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"];
-// 악기별 A키의 MIDI 번호 (옥타브 0일 때). 60 = C4(가운데 도), 36 = C2
-const INSTS = { bass: { name: "베이스", base: 36 }, lead: { name: "리드", base: 60 } };
 const OCT_MIN = -2, OCT_MAX = 2;
 
 // ================= 상태 =================
-let ctx = null, master = null, noiseBuf = null;
-let inst = "lead";        // 지금 선택된 멜로디 악기
-let kitIndex = 0;         // 0 = 808, 1 = 909
+let ctx = null, master = null, analyser = null, noiseBuf = null, verbBuf = null;
+let verbIn = null, delayIn = null, wet = null, fxBus = null, kitBuses = [];
+let out = null;           // 드럼·효과음 재료가 연결될 곳 (킷마다 다름)
+let inst = 4;             // 지금 선택된 악기 (INSTS 번호, 4 = 리드)
+let kitIndex = 0;         // 드럼 킷 번호
 let octave = 0;           // 옥타브 이동 (-2 ~ +2)
 const pressed = new Set();  // 지금 눌린 키(code)
 const held = new Map();     // 누르고 있는 건반 code → 울리는 소리
@@ -78,7 +90,8 @@ const active = new Set();   // 지금 울리는 모든 소리 (Esc용)
 const $ = id => document.getElementById(id);
 
 // ================= 오디오 기본 =================
-// 모든 소리 → master(음량) → 컴프레서(리미터처럼 강하게) → 스피커
+// 소리 → master(음량) → 컴프레서(리미터처럼 강하게) → 분석기(시각화) → 스피커
+// 리버브·딜레이는 '보내기(send)'로 master에 섞는다
 function initAudio(c) {
   ctx = c;
   const comp = ctx.createDynamicsCompressor();
@@ -87,13 +100,94 @@ function initAudio(c) {
   comp.ratio.value = 20;
   comp.attack.value = 0.002;
   comp.release.value = 0.15;
+  analyser = ctx.createAnalyser();
+  analyser.fftSize = 2048;
   master = ctx.createGain();
   master.gain.value = 0.5;
-  master.connect(comp).connect(ctx.destination);
-  // 화이트 노이즈 1초 (스네어, 하이햇, 클랩 재료)
-  noiseBuf = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
+  master.connect(comp).connect(analyser).connect(ctx.destination);
+
+  // 화이트 노이즈 2초 (스네어, 하이햇, 클랩, 효과음 재료)
+  noiseBuf = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate);
   const d = noiseBuf.getChannelData(0);
   for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+
+  verbBuf = impulse(2.5, 3);
+  verbIn = ctx.createGain();
+  delayIn = ctx.createGain();
+  wet = null;
+  buildWet();
+
+  // 효과음 버스: 리버브를 조금 섞는다
+  fxBus = ctx.createGain();
+  fxBus.connect(master);
+  fxBus.connect(gainNode(0.35)).connect(verbIn);
+
+  // 킷별 버스: 로파이는 고음 깎기+찌그러짐, 80s는 게이트 리버브
+  kitBuses = KITS.map(k => {
+    const b = k.bus || {};
+    const input = ctx.createGain();
+    let node = input;
+    if (b.lp) node = node.connect(filterNode("lowpass", b.lp));
+    if (b.drive) node = node.connect(shaper(b.drive));
+    node.connect(master);
+    if (b.gated) {
+      const conv = ctx.createConvolver();
+      conv.buffer = impulse(0.35, 0.3);
+      input.connect(conv).connect(gainNode(0.6)).connect(master);
+    }
+    return input;
+  });
+}
+
+function gainNode(v) { const g = ctx.createGain(); g.gain.value = v; return g; }
+function filterNode(type, freq, Q = 1) {
+  const f = ctx.createBiquadFilter();
+  f.type = type; f.frequency.value = freq; f.Q.value = Q;
+  return f;
+}
+
+// 리버브용 '공간 울림' 데이터: 노이즈가 점점 작아지는 모양. pow가 클수록 빨리 줄어든다
+function impulse(sec, pow) {
+  const len = Math.floor(ctx.sampleRate * sec);
+  const buf = ctx.createBuffer(2, len, ctx.sampleRate);
+  for (let ch = 0; ch < 2; ch++) {
+    const d = buf.getChannelData(ch);
+    for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, pow);
+  }
+  return buf;
+}
+
+// 찌그러뜨리기(디스토션). k가 클수록 세게
+const curves = {};
+function shaper(k) {
+  if (!curves[k]) {
+    const c = new Float32Array(1024);
+    for (let i = 0; i < c.length; i++) {
+      const x = i / 511.5 - 1;
+      c[i] = ((1 + k) * x) / (1 + k * Math.abs(x));
+    }
+    curves[k] = c;
+  }
+  const s = ctx.createWaveShaper();
+  s.curve = curves[k];
+  return s;
+}
+
+// 리버브·딜레이 본체. Esc를 누르면 새로 만들어서 남은 울림까지 끊는다
+function buildWet() {
+  if (wet) { verbIn.disconnect(); delayIn.disconnect(); wet.forEach(n => n.disconnect()); }
+  const conv = ctx.createConvolver();
+  conv.buffer = verbBuf;
+  const verbOut = gainNode(0.5);
+  verbIn.connect(conv).connect(verbOut).connect(master);
+  const dl = ctx.createDelay(1);
+  dl.delayTime.value = 0.35;          // 128 BPM의 점8분음표 근처
+  const fb = gainNode(0.35);          // 메아리가 얼마나 반복될지
+  const dlf = filterNode("lowpass", 2500);
+  delayIn.connect(dl);
+  dl.connect(dlf).connect(fb).connect(dl);
+  dlf.connect(master);
+  wet = [conv, verbOut, dl, fb, dlf];
 }
 
 // 울리는 소리를 기록해 두고, 끝나면 지운다
@@ -113,48 +207,61 @@ function stopAll() {
     v.srcs.forEach(s => { try { s.stop(t + 0.03); } catch (e) {} });
   }
   held.clear();
+  buildWet();
 }
 
-// ================= 드럼 재료 3가지 =================
-// 1) 음높이가 f0 → f1로 내려가는 오실레이터 (킥, 탐, 스네어 몸통, 림, 카우벨)
-function tone(t, { type = "sine", f0, f1 = f0, drop = 0.05, dur, vol, filter }) {
+// ================= 드럼·효과음 재료 =================
+// 음량 모양: decay = 바로 크게 → 줄어듦, rise = 작게 → 커지다 끊김, hold = 유지하다 끊김
+function env(g, t, vol, dur, shape = "decay") {
+  if (shape === "rise") {
+    g.gain.setValueAtTime(0.001, t);
+    g.gain.exponentialRampToValueAtTime(vol, t + dur);
+  } else if (shape === "hold") {
+    g.gain.setValueAtTime(vol, t);
+    g.gain.setValueAtTime(vol, t + dur - 0.01);
+    g.gain.linearRampToValueAtTime(0, t + dur);
+  } else {
+    g.gain.setValueAtTime(vol, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  }
+}
+
+// 1) 음높이가 f0 → f1로 변하는 오실레이터 (킥, 탐, 림, 벨, 라이저 등)
+function tone(t, { type = "sine", f0, f1 = f0, drop = 0.05, dur, vol, filter, drive, shape }) {
   const o = ctx.createOscillator(), g = ctx.createGain();
   o.type = type;
   o.frequency.setValueAtTime(f0, t);
   if (f1 !== f0) o.frequency.exponentialRampToValueAtTime(f1, t + drop);
-  g.gain.setValueAtTime(vol, t);
-  g.gain.exponentialRampToValueAtTime(0.001, t + dur);
-  let out = o;
-  if (filter) {
-    const f = ctx.createBiquadFilter();
-    f.type = filter[0]; f.frequency.value = filter[1];
-    out = o.connect(f);
-  }
-  out.connect(g).connect(master);
+  env(g, t, vol, dur, shape);
+  let node = o;
+  if (filter) node = node.connect(filterNode(filter[0], filter[1]));
+  if (drive) node = node.connect(shaper(drive));
+  node.connect(g).connect(out);
   o.start(t); o.stop(t + dur);
   track(g, [o]);
 }
 
-// 2) 필터를 거친 노이즈 (스네어 '촤', 하이햇, 크래시)
-function noise(t, { type = "highpass", freq, Q = 1, dur, vol }) {
-  const s = ctx.createBufferSource(), f = ctx.createBiquadFilter(), g = ctx.createGain();
+// 2) 필터를 거친 노이즈 (스네어 '촤', 하이햇, 크래시, 스윕)
+function noise(t, { type = "highpass", freq, sweepTo, Q = 1, dur, vol, shape }) {
+  const s = ctx.createBufferSource(), f = filterNode(type, freq, Q), g = ctx.createGain();
   s.buffer = noiseBuf; s.loop = true;
-  f.type = type; f.frequency.value = freq; f.Q.value = Q;
-  g.gain.setValueAtTime(vol, t);
-  g.gain.exponentialRampToValueAtTime(0.001, t + dur);
-  s.connect(f).connect(g).connect(master);
-  s.start(t); s.stop(t + dur);
+  if (sweepTo) {
+    f.frequency.setValueAtTime(freq, t);  // 시작점을 박아 두지 않으면 변화가 엉뚱한 시각부터 계산된다
+    f.frequency.exponentialRampToValueAtTime(sweepTo, t + dur);
+  }
+  env(g, t, vol, dur, shape);
+  s.connect(f).connect(g).connect(out);
+  s.start(t, Math.random());  // 시작 위치를 섞어서 겹쳐도 같은 노이즈가 되지 않게
+  s.stop(t + dur);
   track(g, [s]);
 }
 
 // 3) 사각파 6개를 겹친 쇳소리 (808 하이햇·심벌 방식)
 const METAL = [205.3, 304.4, 369.6, 522.7, 540, 800];
-function metal(t, { hp, dur, vol }) {
-  const f = ctx.createBiquadFilter(), g = ctx.createGain();
-  f.type = "highpass"; f.frequency.value = hp;
-  g.gain.setValueAtTime(vol, t);
-  g.gain.exponentialRampToValueAtTime(0.001, t + dur);
-  f.connect(g).connect(master);
+function metal(t, { hp, dur, vol, shape }) {
+  const f = filterNode("highpass", hp), g = ctx.createGain();
+  env(g, t, vol, dur, shape);
+  f.connect(g).connect(out);
   const oscs = METAL.map(fr => {
     const o = ctx.createOscillator();
     o.type = "square"; o.frequency.value = fr;
@@ -164,11 +271,10 @@ function metal(t, { hp, dur, vol }) {
   track(g, oscs);
 }
 
-// 클랩: 노이즈를 짧게 3번 끊어 친 뒤 꼬리를 남긴다
+// 4) 클랩: 노이즈를 짧게 3번 끊어 친 뒤 꼬리를 남긴다
 function clap(t, freq, tail, vol) {
-  const s = ctx.createBufferSource(), f = ctx.createBiquadFilter(), g = ctx.createGain();
+  const s = ctx.createBufferSource(), f = filterNode("bandpass", freq, 1.5), g = ctx.createGain();
   s.buffer = noiseBuf; s.loop = true;
-  f.type = "bandpass"; f.frequency.value = freq; f.Q.value = 1.5;
   g.gain.setValueAtTime(0, t);
   for (const d of [0, 0.012, 0.024]) {
     g.gain.setValueAtTime(vol, t + d);
@@ -176,12 +282,12 @@ function clap(t, freq, tail, vol) {
   }
   g.gain.setValueAtTime(vol, t + 0.036);
   g.gain.exponentialRampToValueAtTime(0.001, t + 0.036 + tail);
-  s.connect(f).connect(g).connect(master);
-  s.start(t); s.stop(t + 0.04 + tail);
+  s.connect(f).connect(g).connect(out);
+  s.start(t, Math.random()); s.stop(t + 0.04 + tail);
   track(g, [s]);
 }
 
-// ================= 드럼 킷 2개 (순서 = DRUM_NAMES) =================
+// ================= 드럼 킷 8개 (순서 = DRUM_NAMES, names로 일부 자리 이름 바꿈) =================
 const KITS = [
   { name: "808", hits: [
     t => tone(t, { f0: 150, f1: 45, drop: 0.08, dur: 0.9, vol: 1 }),
@@ -212,48 +318,274 @@ const KITS = [
            noise(t, { type: "bandpass", freq: 400, dur: 0.05, vol: 0.2 }); },
     t => { tone(t, { f0: 260, f1: 180, drop: 0.15, dur: 0.3, vol: 0.7 });
            noise(t, { type: "bandpass", freq: 700, dur: 0.05, vol: 0.2 }); },
-    t => { noise(t, { type: "bandpass", freq: 2500, Q: 8, dur: 0.025, vol: 0.9 });
+    t => { noise(t, { type: "bandpass", freq: 2500, Q: 8, dur: 0.025, vol: 2.5 });
            tone(t, { type: "triangle", f0: 1000, dur: 0.02, vol: 0.3 }); },
     t => { tone(t, { type: "square", f0: 587, dur: 0.15, vol: 0.25, filter: ["bandpass", 900] });
            tone(t, { type: "square", f0: 845, dur: 0.15, vol: 0.25, filter: ["bandpass", 900] }); },
     t => { noise(t, { freq: 4000, dur: 1.8, vol: 0.35 });
            metal(t, { hp: 6000, dur: 1.2, vol: 0.15 }); },
   ]},
+  // 트랩: 길게 끌리며 내려가는 808 붐 킥, 날카로운 스네어, 롤용 짧은 하이햇
+  { name: "트랩", names: { 7: "스냅", 8: "벨" }, hits: [
+    t => tone(t, { f0: 160, f1: 42, drop: 0.06, dur: 1.6, vol: 0.9, drive: 3 }),
+    t => { tone(t, { type: "triangle", f0: 240, f1: 200, drop: 0.03, dur: 0.1, vol: 0.5 });
+           noise(t, { freq: 2000, dur: 0.2, vol: 0.6 }); },
+    t => clap(t, 1200, 0.22, 0.9),
+    t => noise(t, { freq: 9500, dur: 0.035, vol: 0.5 }),
+    t => noise(t, { freq: 8000, dur: 0.32, vol: 0.4 }),
+    t => tone(t, { f0: 95, f1: 62, drop: 0.4, dur: 0.7, vol: 0.8, drive: 1.5 }),
+    t => tone(t, { f0: 170, f1: 115, drop: 0.3, dur: 0.5, vol: 0.7, drive: 1.5 }),
+    t => { noise(t, { type: "bandpass", freq: 2600, Q: 2, dur: 0.07, vol: 2 });
+           tone(t, { type: "triangle", f0: 1800, dur: 0.02, vol: 0.2 }); },
+    t => { tone(t, { f0: 1318, dur: 0.6, vol: 0.25 });
+           tone(t, { f0: 2643, dur: 0.3, vol: 0.1 });
+           tone(t, { type: "triangle", f0: 659, dur: 0.5, vol: 0.15 }); },
+    t => { metal(t, { hp: 5000, dur: 1.5, vol: 0.2 });
+           noise(t, { freq: 5000, dur: 1.4, vol: 0.25 }); },
+  ]},
+  // 빅룸: 페스티벌 EDM. 크고 찌그러진 킥, 두 겹 클랩, 노이즈 스네어
+  { name: "빅룸", names: { 8: "탬버린" }, hits: [
+    t => { tone(t, { f0: 220, f1: 48, drop: 0.07, dur: 0.65, vol: 1, drive: 4 });
+           noise(t, { freq: 2500, dur: 0.02, vol: 0.5 }); },
+    t => { tone(t, { type: "triangle", f0: 190, f1: 170, drop: 0.05, dur: 0.15, vol: 0.5 });
+           noise(t, { freq: 1000, dur: 0.3, vol: 0.7 }); },
+    t => { clap(t, 1100, 0.4, 0.8); clap(t, 1800, 0.3, 0.5); },
+    t => noise(t, { freq: 9000, dur: 0.05, vol: 0.45 }),
+    t => noise(t, { freq: 7000, dur: 0.5, vol: 0.4 }),
+    t => { tone(t, { f0: 130, f1: 80, drop: 0.2, dur: 0.45, vol: 0.8, drive: 2 });
+           noise(t, { type: "bandpass", freq: 500, dur: 0.05, vol: 0.2 }); },
+    t => { tone(t, { f0: 230, f1: 150, drop: 0.2, dur: 0.38, vol: 0.7, drive: 2 });
+           noise(t, { type: "bandpass", freq: 900, dur: 0.05, vol: 0.2 }); },
+    t => { noise(t, { type: "bandpass", freq: 3000, Q: 6, dur: 0.03, vol: 2.5 });
+           tone(t, { type: "triangle", f0: 900, dur: 0.025, vol: 0.3 }); },
+    t => { for (const d of [0, 0.02, 0.045]) noise(t + d, { freq: 7000, Q: 2, dur: 0.09, vol: 0.35 }); },
+    t => noise(t, { freq: 3000, dur: 2.4, vol: 0.45 }),
+  ]},
+  // 테크노: 세게 찌그러진 킥, 낮게 우르릉거리는 럼블, 쇳소리 퍼커션
+  { name: "테크노", names: { 5: "럼블", 7: "메탈", 8: "클랭" }, hits: [
+    t => { tone(t, { f0: 180, f1: 45, drop: 0.05, dur: 0.55, vol: 1, drive: 8 });
+           noise(t, { freq: 4000, dur: 0.012, vol: 0.4 }); },
+    t => { noise(t, { type: "bandpass", freq: 1800, Q: 0.8, dur: 0.22, vol: 0.9 });
+           tone(t, { type: "square", f0: 240, f1: 180, drop: 0.04, dur: 0.08, vol: 0.2, drive: 3 }); },
+    t => clap(t, 900, 0.3, 0.9),
+    t => metal(t, { hp: 9000, dur: 0.03, vol: 0.45 }),
+    t => metal(t, { hp: 8000, dur: 0.25, vol: 0.4 }),
+    t => tone(t, { f0: 55, f1: 45, drop: 0.6, dur: 0.9, vol: 0.7, drive: 6, filter: ["lowpass", 180] }),
+    t => tone(t, { f0: 300, f1: 200, drop: 0.08, dur: 0.2, vol: 0.6, drive: 3 }),
+    t => { metal(t, { hp: 2000, dur: 0.15, vol: 0.35 });
+           tone(t, { type: "square", f0: 1200, dur: 0.05, vol: 0.15 }); },
+    t => { tone(t, { type: "square", f0: 330, dur: 0.18, vol: 0.18, filter: ["bandpass", 1200] });
+           tone(t, { type: "square", f0: 507, dur: 0.18, vol: 0.18, filter: ["bandpass", 1200] }); },
+    t => { noise(t, { freq: 4000, dur: 1.5, vol: 0.35 });
+           metal(t, { hp: 3000, dur: 1.2, vol: 0.2 }); },
+  ]},
+  // 80s 신스팝: 모든 소리에 짧게 끊기는 '게이트 리버브', 시몬스 스타일 전자 탐
+  { name: "80s", bus: { gated: true }, names: { 8: "탬버린" }, hits: [
+    t => tone(t, { f0: 130, f1: 50, drop: 0.06, dur: 0.4, vol: 0.9 }),
+    t => { tone(t, { type: "triangle", f0: 180, f1: 160, drop: 0.05, dur: 0.12, vol: 0.5 });
+           noise(t, { freq: 800, dur: 0.2, vol: 0.7 }); },
+    t => clap(t, 1100, 0.25, 0.8),
+    t => noise(t, { freq: 8000, dur: 0.05, vol: 0.35 }),
+    t => noise(t, { freq: 7000, dur: 0.4, vol: 0.3 }),
+    t => { tone(t, { f0: 220, f1: 90, drop: 0.3, dur: 0.5, vol: 0.7 });
+           noise(t, { type: "lowpass", freq: 1500, dur: 0.06, vol: 0.25 }); },
+    t => { tone(t, { f0: 330, f1: 150, drop: 0.3, dur: 0.45, vol: 0.6 });
+           noise(t, { type: "lowpass", freq: 2000, dur: 0.06, vol: 0.25 }); },
+    t => { tone(t, { type: "triangle", f0: 1500, dur: 0.03, vol: 0.4 });
+           noise(t, { type: "bandpass", freq: 3000, Q: 3, dur: 0.03, vol: 0.5 }); },
+    t => { for (const d of [0, 0.025]) noise(t + d, { freq: 6500, Q: 2, dur: 0.12, vol: 0.3 }); },
+    t => noise(t, { freq: 5000, dur: 1.6, vol: 0.35 }),
+  ]},
+  // 로파이: 킷 전체의 고음을 깎고 살짝 찌그러뜨려 먹먹하고 따뜻하게
+  { name: "로파이", bus: { lp: 3200, drive: 1.5 }, names: { 8: "쉐이커", 9: "라이드" }, hits: [
+    t => tone(t, { f0: 110, f1: 50, drop: 0.07, dur: 0.5, vol: 0.9 }),
+    t => { tone(t, { type: "triangle", f0: 190, dur: 0.1, vol: 0.4 });
+           noise(t, { type: "bandpass", freq: 1800, Q: 0.7, dur: 0.22, vol: 0.8 }); },
+    t => clap(t, 1000, 0.2, 0.7),
+    t => noise(t, { freq: 2500, dur: 0.05, vol: 0.6 }),
+    t => noise(t, { freq: 2500, dur: 0.3, vol: 0.5 }),
+    t => tone(t, { f0: 100, f1: 80, drop: 0.2, dur: 0.4, vol: 0.7 }),
+    t => tone(t, { f0: 170, f1: 140, drop: 0.2, dur: 0.35, vol: 0.6 }),
+    t => tone(t, { type: "triangle", f0: 1200, dur: 0.03, vol: 0.45 }),
+    t => { noise(t, { freq: 5000, dur: 0.04, vol: 0.3, shape: "rise" });
+           noise(t + 0.04, { freq: 5000, dur: 0.07, vol: 0.3 }); },
+    t => { metal(t, { hp: 4000, dur: 0.9, vol: 0.2 });
+           noise(t, { freq: 6000, dur: 0.6, vol: 0.15 }); },
+  ]},
+  // 칩튠: 옛날 게임기처럼 사각파·삼각파·노이즈만 쓴다
+  { name: "칩튠", names: { 7: "블립", 8: "코인", 9: "노이즈" }, hits: [
+    t => tone(t, { type: "square", f0: 180, f1: 40, drop: 0.08, dur: 0.15, vol: 1 }),
+    t => { noise(t, { freq: 1000, dur: 0.15, vol: 0.5 });
+           tone(t, { type: "square", f0: 220, f1: 110, drop: 0.05, dur: 0.08, vol: 0.2 }); },
+    t => { for (const d of [0, 0.03, 0.06]) noise(t + d, { type: "bandpass", freq: 1500, dur: 0.03, vol: 0.5 }); },
+    t => noise(t, { freq: 7000, dur: 0.03, vol: 0.4 }),
+    t => noise(t, { freq: 6000, dur: 0.2, vol: 0.35 }),
+    t => tone(t, { type: "triangle", f0: 200, f1: 90, drop: 0.15, dur: 0.2, vol: 0.6 }),
+    t => tone(t, { type: "triangle", f0: 350, f1: 170, drop: 0.15, dur: 0.18, vol: 0.6 }),
+    t => tone(t, { type: "square", f0: 1760, dur: 0.05, vol: 0.5 }),
+    t => { tone(t, { type: "square", f0: 988, dur: 0.08, vol: 0.18, shape: "hold" });
+           tone(t + 0.08, { type: "square", f0: 1319, dur: 0.35, vol: 0.18 }); },
+    t => noise(t, { type: "lowpass", freq: 3000, sweepTo: 200, dur: 0.7, vol: 0.6 }),
+  ]},
 ];
 
-// ================= 멜로디 악기 =================
+// ================= 효과음 10개 (Shift + Z줄) =================
+const FX = [
+  { short: "라이저", play: t => {   // 드롭 직전에 쭉 올라가는 소리
+      noise(t, { type: "bandpass", freq: 300, sweepTo: 9000, Q: 2, dur: 2.5, vol: 0.5, shape: "rise" });
+      tone(t, { type: "sawtooth", f0: 150, f1: 1500, drop: 2.5, dur: 2.5, vol: 0.12, shape: "rise" }); } },
+  { short: "다운", play: t => {     // 다운리프터: 쭉 내려가는 소리
+      noise(t, { type: "bandpass", freq: 9000, sweepTo: 200, Q: 2, dur: 2, vol: 0.5 });
+      tone(t, { type: "sawtooth", f0: 1500, f1: 100, drop: 2, dur: 2, vol: 0.12 }); } },
+  { short: "임팩트", play: t => {   // 드롭이 터지는 '쿵'
+      tone(t, { f0: 90, f1: 30, drop: 1, dur: 2, vol: 1, drive: 2 });
+      noise(t, { type: "lowpass", freq: 2000, sweepTo: 200, dur: 1.5, vol: 0.6 }); } },
+  { short: "서브드롭", play: t =>
+      tone(t, { f0: 70, f1: 28, drop: 1.5, dur: 2, vol: 1 }) },
+  { short: "리버스", play: t => {   // 거꾸로 재생한 심벌처럼 커지다 뚝
+      noise(t, { freq: 3000, dur: 1.6, vol: 0.5, shape: "rise" });
+      metal(t, { hp: 6000, dur: 1.6, vol: 0.15, shape: "rise" }); } },
+  { short: "스윕", play: t =>       // 필터가 열리는 노이즈
+      noise(t, { type: "lowpass", freq: 200, sweepTo: 14000, Q: 6, dur: 3, vol: 0.35, shape: "rise" }) },
+  { short: "레이저", play: t => {
+      tone(t, { type: "square", f0: 2500, f1: 80, drop: 0.3, dur: 0.35, vol: 0.25 });
+      tone(t, { type: "sawtooth", f0: 3000, f1: 150, drop: 0.25, dur: 0.3, vol: 0.15 }); } },
+  { short: "에어혼", play: t => {   // 빰-빰-빠암
+      for (const [s, len] of [[0, 0.12], [0.17, 0.12], [0.34, 0.7]])
+        for (const det of [0.99, 1, 1.01])
+          tone(t + s, { type: "sawtooth", f0: 470 * det, f1: 440 * det, drop: len, dur: len,
+                        vol: 0.12, filter: ["lowpass", 2500], shape: "hold" }); } },
+  { short: "사이렌", play: t => {   // 덥 사이렌: 음높이가 빠르게 오르내림
+      const o = ctx.createOscillator(), lfo = ctx.createOscillator(), g = ctx.createGain();
+      o.type = "square"; o.frequency.value = 700;
+      lfo.frequency.value = 4;
+      lfo.connect(gainNode(250)).connect(o.frequency);
+      env(g, t, 0.15, 2, "hold");
+      o.connect(filterNode("lowpass", 2000)).connect(g).connect(out);
+      o.start(t); lfo.start(t); o.stop(t + 2); lfo.stop(t + 2);
+      track(g, [o, lfo]); } },
+  { short: "스네어롤", play: t => { // 빌드업: 점점 빨라지는 스네어 (지금 킷의 스네어 사용)
+      out = kitBuses[kitIndex];
+      let tt = t, gap = 0.2;
+      for (let i = 0; i < 24; i++) { KITS[kitIndex].hits[1](tt); tt += gap; gap = Math.max(0.03, gap * 0.88); } } },
+];
+
+// ================= 멜로디 악기 10개 (숫자 1~0) =================
+// oscs: [파형, 주파수 배수, 어긋남(cent), 음량, 좌우 위치(-1~1)]
+// filter.env: [시작 주파수, 걸리는 시간] → 시작 주파수에서 freq로 닫힌다
+// filter.lfo / vibrato: [속도(Hz), 깊이]  amp: a=어택, d=줄어드는 시간, s=유지 비율, r=뗀 뒤 꼬리
+const INSTS = [
+  { key: "Digit1", short: "베이스", name: "신스 베이스", base: 36,
+    oscs: [["sawtooth", 1, -8, 1], ["sawtooth", 1, 8, 1], ["square", 0.5, 0, 1]],
+    filter: { freq: 400, Q: 6, env: [3000, 0.25] }, amp: { a: 0.005, r: 0.08 }, peak: 0.3 },
+  { key: "Digit2", short: "서브", name: "서브 베이스", base: 36,
+    oscs: [["sine", 1, 0, 1], ["triangle", 1, 0, 0.15]], pitchEnv: [2, 0.04], drive: 2,
+    amp: { a: 0.005, r: 0.15 }, peak: 0.5 },
+  { key: "Digit3", short: "애시드", name: "애시드 베이스 (303)", base: 36,
+    oscs: [["sawtooth", 1, 0, 1]], filter: { freq: 300, Q: 18, env: [5000, 0.18] }, drive: 3,
+    amp: { a: 0.003, r: 0.05 }, peak: 0.25 },
+  { key: "Digit4", short: "리스", name: "리스 베이스", base: 36,
+    oscs: [["sawtooth", 1, -18, 1, -0.5], ["sawtooth", 1, 18, 1, 0.5], ["sine", 0.5, 0, 1]],
+    filter: { freq: 700, Q: 3, lfo: [0.4, 450] }, drive: 2, amp: { a: 0.01, r: 0.12 }, peak: 0.22 },
+  { key: "Digit5", short: "리드", name: "리드", base: 60,
+    oscs: [["sawtooth", 1, -10, 1, -0.3], ["sawtooth", 1, 0, 1], ["sawtooth", 1, 10, 1, 0.3]],
+    filter: { freq: 5000, Q: 1 }, vibrato: [5.5, 10], amp: { a: 0.01, r: 0.2 }, peak: 0.15,
+    delay: 0.25, verb: 0.15 },
+  { key: "Digit6", short: "슈퍼쏘", name: "슈퍼쏘", base: 60,
+    oscs: [-30, -18, -8, 0, 8, 18, 30].map((d, i) => ["sawtooth", 1, d, 1, (i - 3) / 3]),
+    filter: { freq: 9000, Q: 0.5 }, amp: { a: 0.01, r: 0.4 }, peak: 0.08, verb: 0.35, delay: 0.15 },
+  { key: "Digit7", short: "플럭", name: "플럭", base: 60,
+    oscs: [["sawtooth", 1, -12, 1, -0.4], ["sawtooth", 1, 12, 1, 0.4], ["square", 2, 0, 0.3]],
+    filter: { freq: 350, Q: 4, env: [7000, 0.15] }, amp: { a: 0.002, d: 0.35, s: 0, r: 0.2 },
+    peak: 0.5, verb: 0.3, delay: 0.3 },
+  { key: "Digit8", short: "칩튠", name: "칩튠", base: 60,
+    oscs: [["square", 1, 0, 1]], vibrato: [6, 15], amp: { a: 0.001, r: 0.03 }, peak: 0.2, delay: 0.1 },
+  { key: "Digit9", short: "패드", name: "패드", base: 48,
+    oscs: [["sawtooth", 1, -12, 1, -0.6], ["sawtooth", 1, 12, 1, 0.6], ["sawtooth", 1, -5, 1, -0.2],
+           ["sawtooth", 1, 5, 1, 0.2], ["triangle", 2, 0, 1]],
+    filter: { freq: 1500, Q: 1, lfo: [0.2, 600] }, amp: { a: 0.6, r: 1.2 }, peak: 0.07, verb: 0.6 },
+  { key: "Digit0", short: "EP", name: "일렉 피아노", base: 60,
+    oscs: [["sine", 1, 0, 1]], fm: [1, 2.5, 1.2], amp: { a: 0.003, d: 2.5, s: 0.15, r: 0.4 },
+    peak: 0.3, verb: 0.3 },
+];
+
 // 누르는 동안 울리고(noteOn), 떼면 꺼진다(noteOff)
 function noteOn(code, midi) {
+  const def = INSTS[inst];
   const t = ctx.currentTime;
   const f = 440 * Math.pow(2, (midi - 69) / 12);
-  const g = ctx.createGain(), flt = ctx.createBiquadFilter();
-  flt.type = "lowpass";
-  const oscs = [];
-  const osc = (type, freq, detune) => {
-    const o = ctx.createOscillator();
-    o.type = type; o.frequency.value = freq; o.detune.value = detune;
-    o.connect(flt); o.start(t); oscs.push(o);
-  };
-  let peak, attack, release;
-  if (inst === "bass") {
-    // 톱니파 2개(살짝 어긋나게) + 한 옥타브 아래 사각파, 필터가 빠르게 닫히며 '뭉' 소리
-    osc("sawtooth", f, -8); osc("sawtooth", f, 8); osc("square", f / 2, 0);
-    flt.Q.value = 6;
-    flt.frequency.setValueAtTime(3000, t);
-    flt.frequency.exponentialRampToValueAtTime(400, t + 0.25);
-    peak = 0.3; attack = 0.005; release = 0.08;
-  } else {
-    // 톱니파 3개를 조금씩 어긋나게 겹친 두꺼운 리드
-    osc("sawtooth", f, -10); osc("sawtooth", f, 0); osc("sawtooth", f, 10);
-    flt.Q.value = 1;
-    flt.frequency.value = 5000;
-    peak = 0.15; attack = 0.01; release = 0.2;
+  const amp = ctx.createGain();
+  const srcs = [];
+
+  // 오실레이터 → (필터) → (찌그러짐) → 음량 모양(amp)
+  let head = ctx.createGain(), tail = head;
+  let flt = null;
+  if (def.filter) {
+    flt = filterNode("lowpass", def.filter.freq, def.filter.Q);
+    tail = tail.connect(flt);
+    if (def.filter.env) {
+      flt.frequency.setValueAtTime(def.filter.env[0], t);
+      flt.frequency.exponentialRampToValueAtTime(def.filter.freq, t + def.filter.env[1]);
+    }
   }
-  g.gain.setValueAtTime(0, t);
-  g.gain.linearRampToValueAtTime(peak, t + attack);
-  flt.connect(g).connect(master);
-  const v = track(g, oscs);
-  v.release = release;
+  if (def.drive) tail = tail.connect(shaper(def.drive));
+  tail.connect(amp);
+
+  // 떨림(LFO): 필터를 흔들거나(lfo) 음높이를 흔든다(vibrato)
+  const lfo = (rate, depth) => {
+    const o = ctx.createOscillator();
+    o.frequency.value = rate; o.start(t); srcs.push(o);
+    return o.connect(gainNode(depth));
+  };
+  if (def.filter && def.filter.lfo) lfo(...def.filter.lfo).connect(flt.frequency);
+  const vib = def.vibrato ? lfo(...def.vibrato) : null;
+  // FM: 다른 오실레이터로 음높이를 아주 빠르게 흔들어 종·피아노 같은 소리를 만든다
+  let fmOut = null;
+  if (def.fm) {
+    const [ratio, index, decay] = def.fm;
+    const m = ctx.createOscillator(), mg = ctx.createGain();
+    m.frequency.value = f * ratio;
+    mg.gain.setValueAtTime(f * index, t);
+    mg.gain.exponentialRampToValueAtTime(f * index * 0.1, t + decay);
+    m.connect(mg); m.start(t); srcs.push(m);
+    fmOut = mg;
+  }
+
+  for (const [type, ratio, detune, vol, pan] of def.oscs) {
+    const o = ctx.createOscillator();
+    o.type = type;
+    o.detune.value = detune;
+    if (def.pitchEnv) {
+      o.frequency.setValueAtTime(f * ratio * def.pitchEnv[0], t);
+      o.frequency.exponentialRampToValueAtTime(f * ratio, t + def.pitchEnv[1]);
+    } else {
+      o.frequency.value = f * ratio;
+    }
+    if (vib) vib.connect(o.detune);
+    if (fmOut) fmOut.connect(o.frequency);
+    let node = o.connect(gainNode(vol));
+    if (pan && ctx.createStereoPanner) {
+      const p = ctx.createStereoPanner();
+      p.pan.value = pan;
+      node = node.connect(p);
+    }
+    node.connect(head);
+    o.start(t);
+    srcs.unshift(o);  // srcs[0]이 소리 나는 오실레이터가 되도록 (끝났는지 확인용)
+  }
+
+  // 음량 모양: 어택까지 올라갔다가, d가 있으면 s만큼으로 줄어든다
+  const { a, d, s = 1, r } = def.amp;
+  amp.gain.setValueAtTime(0, t);
+  amp.gain.linearRampToValueAtTime(def.peak, t + a);
+  if (d) amp.gain.setTargetAtTime(def.peak * s, t + a, d / 4);
+
+  amp.connect(master);
+  if (def.verb) amp.connect(gainNode(def.verb)).connect(verbIn);
+  if (def.delay) amp.connect(gainNode(def.delay)).connect(delayIn);
+
+  const v = track(amp, srcs);
+  v.release = r;
   held.set(code, v);
 }
 
@@ -276,14 +608,18 @@ function onKeyDown(e) {
   const code = e.code;
   pressed.add(code);
 
-  if (code === "Digit1") inst = "bass";
-  else if (code === "Digit2") inst = "lead";
-  else if (code === "ArrowLeft" || code === "ArrowRight") kitIndex = 1 - kitIndex;
+  const instIdx = INSTS.findIndex(i => i.key === code);
+  const d = DRUM_KEYS.indexOf(code);
+  if (instIdx >= 0) inst = instIdx;
+  else if (code === "ArrowRight") kitIndex = (kitIndex + 1) % KITS.length;
+  else if (code === "ArrowLeft") kitIndex = (kitIndex + KITS.length - 1) % KITS.length;
   else if (code === "ArrowUp") octave = Math.min(OCT_MAX, octave + 1);
   else if (code === "ArrowDown") octave = Math.max(OCT_MIN, octave - 1);
+  else if (code === "Backquote") toggleViz();
   else if (ctx && ctx.state === "running") {
-    const d = DRUM_KEYS.indexOf(code);
-    if (d >= 0) KITS[kitIndex].hits[d](ctx.currentTime);
+    const t = ctx.currentTime;
+    if (d >= 0 && e.shiftKey) { out = fxBus; FX[d].play(t); }
+    else if (d >= 0) { out = kitBuses[kitIndex]; KITS[kitIndex].hits[d](t); }
     else if (code in NOTE_KEYS) noteOn(code, INSTS[inst].base + octave * 12 + NOTE_KEYS[code]);
     else if (code === "Escape") stopAll();
   }
@@ -322,6 +658,56 @@ document.addEventListener("visibilitychange", () => {
   }
 });
 
+// ================= 시각화 =================
+// 지금 나는 소리의 파형을 잔상이 남는 선으로 그린다. 소리가 클수록 굵고 밝아진다
+let vizOn = false, vizData = null, energy = 0;
+const canvas = $("vizCanvas"), g2d = canvas.getContext("2d");
+
+function toggleViz() {
+  vizOn = !vizOn;
+  $("viz").style.display = vizOn ? "block" : "none";
+  if (vizOn) {
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    canvas.width = window.innerWidth * dpr;
+    canvas.height = window.innerHeight * dpr;
+    requestAnimationFrame(drawViz);
+  }
+}
+$("viz").addEventListener("click", toggleViz);  // 키보드가 끊겼을 때를 대비해 화면을 탭해도 꺼진다
+
+function drawViz(now) {
+  if (!vizOn) return;
+  requestAnimationFrame(drawViz);
+  const w = canvas.width, h = canvas.height;
+  g2d.fillStyle = "rgba(0, 0, 0, 0.12)";  // 완전히 지우지 않고 살짝 덮어서 잔상을 남긴다
+  g2d.fillRect(0, 0, w, h);
+  if (!analyser) return;
+  if (!vizData) vizData = new Float32Array(analyser.fftSize);
+  analyser.getFloatTimeDomainData(vizData);
+
+  let sum = 0;
+  for (const x of vizData) sum += x * x;
+  const rms = Math.sqrt(sum / vizData.length);
+  energy = Math.max(rms, energy * 0.92);  // 갑자기 커지고 천천히 줄어들게
+
+  const hue = (now / 40 + energy * 600) % 360;
+  g2d.lineWidth = (2 + Math.min(10, energy * 15)) * (w / window.innerWidth);
+  g2d.lineJoin = "round";
+  // 파형 2줄: 원래 모양과 위아래를 뒤집은 모양, 색은 서로 반대
+  // 앞쪽 512개(약 10ms)만 그려야 물결이 너무 빽빽하지 않다
+  const N = 512;
+  for (const [flip, hueShift] of [[1, 0], [-1, 180]]) {
+    g2d.strokeStyle = `hsl(${(hue + hueShift) % 360}, 100%, ${Math.min(85, 55 + energy * 120)}%)`;
+    g2d.beginPath();
+    for (let i = 0; i < N; i += 2) {
+      const x = (i / (N - 2)) * w;
+      const y = h / 2 + flip * vizData[i] * h * 0.45;
+      if (i === 0) g2d.moveTo(x, y); else g2d.lineTo(x, y);
+    }
+    g2d.stroke();
+  }
+}
+
 // ================= 화면 =================
 const ROWS = [
   [["Backquote","`"],["Digit1","1"],["Digit2","2"],["Digit3","3"],["Digit4","4"],["Digit5","5"],
@@ -352,29 +738,36 @@ for (const row of ROWS) {
 
 function render() {
   const kit = KITS[kitIndex];
+  const shiftHeld = pressed.has("ShiftLeft") || pressed.has("ShiftRight");
   const baseMidi = INSTS[inst].base + octave * 12;
   for (const code in keyEls) {
     const k = keyEls[code];
     let label = "", cls = "k";
     const d = DRUM_KEYS.indexOf(code);
-    if (d >= 0) { label = DRUM_NAMES[d]; cls += " drum"; }
+    const instIdx = INSTS.findIndex(i => i.key === code);
+    if (d >= 0 && shiftHeld) { label = FX[d].short; cls += " fx"; }
+    else if (d >= 0) { label = (kit.names && kit.names[d]) || DRUM_NAMES[d]; cls += " drum"; }
     else if (code in NOTE_KEYS) {
       const n = NOTE_KEYS[code] % 12;
       label = NOTE_NAMES[n];
       cls += NOTE_NAMES[n].includes("#") ? " black" : " white";
     }
-    else if (code === "Digit1") { label = "베이스"; if (inst === "bass") cls += " sel"; }
-    else if (code === "Digit2") { label = "리드"; if (inst === "lead") cls += " sel"; }
+    else if (instIdx >= 0) { label = INSTS[instIdx].short; cls += " inst"; if (instIdx === inst) cls += " sel"; }
+    else if (code === "Backquote") { label = "시각화"; cls += " func"; if (vizOn) cls += " sel"; }
     if (pressed.has(code)) cls += " on";
     k.className = cls;
     k.lastChild.textContent = label;
   }
-  $("inst").textContent = INSTS[inst].name;
-  $("kit").textContent = kit.name;
   const sign = octave > 0 ? "+" : "";
-  $("oct").textContent = `${sign}${octave} (A = ${LETTER_NAMES[0]}${Math.floor(baseMidi / 12) - 1})`;
+  const octText = `${sign}${octave} (A = ${LETTER_NAMES[0]}${Math.floor(baseMidi / 12) - 1})`;
+  $("inst").textContent = `${(inst + 1) % 10} ${INSTS[inst].name}`;
+  $("kit").textContent = `${kit.name} (${kitIndex + 1}/${KITS.length})`;
+  $("oct").textContent = octText;
   $("state").textContent = ctx ? ctx.state : "시작 전";
   $("pressed").textContent = pressed.size ? [...pressed].join(", ") : "(없음)";
+  $("vizInfo").textContent = ctx
+    ? `${INSTS[inst].name} · 킷 ${kit.name} · 옥타브 ${octText}  —  \` 또는 탭하면 닫기`
+    : "먼저 시작 버튼을 눌러 주세요  —  ` 또는 탭하면 닫기";
   if (ctx) {
     $("start").textContent = ctx.state === "running" ? "소리 켜짐" : "다시 켜기 (" + ctx.state + ")";
     $("start").classList.toggle("on", ctx.state === "running");
