@@ -3,203 +3,384 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-<title>Curly MusicKey — 키보드 테스트</title>
+<title>Curly MusicKey</title>
 <style>
   body { margin: 0; padding: 12px; background: #111; color: #eee;
          font: 18px/1.4 -apple-system, system-ui, sans-serif; }
   h1 { font-size: 22px; margin: 0 0 8px; }
-  p { margin: 4px 0; color: #aaa; font-size: 15px; }
+  p { margin: 4px 0; color: #aaa; font-size: 14px; }
   button { width: 100%; font-size: 22px; padding: 16px; margin: 8px 0;
            border: 0; border-radius: 10px; background: #2d6cdf; color: #fff; }
-  button#start.on { background: #2a7a3a; }
+  button.on { background: #2a7a3a; }
   .box { background: #1c1c1c; border-radius: 8px; padding: 10px; margin: 8px 0; }
-  .big { font-size: 26px; font-weight: bold; word-break: break-all; }
   .row { display: flex; justify-content: space-between; gap: 8px; }
-  .mods span { display: inline-block; padding: 2px 8px; margin: 2px; border-radius: 6px; background: #333; color: #777; }
-  .mods span.on { background: #e0a800; color: #000; }
-  pre { margin: 0; white-space: pre-wrap; word-break: break-all; font-size: 13px; }
-  #log { font-family: ui-monospace, Menlo, monospace; font-size: 13px; white-space: pre-wrap; word-break: break-all; }
-  #copyOut { display: none; user-select: text; -webkit-user-select: text; }
+  .big { font-size: 22px; font-weight: bold; }
+  /* 키 배치 안내도: 한 줄 최대 13키, 실제 키보드처럼 줄마다 조금씩 오른쪽으로 */
+  .kb { margin: 8px 0; }
+  .kr { display: flex; gap: 0.5%; margin-bottom: 4px; }
+  .kr:nth-child(2) { margin-left: 3.5%; }
+  .kr:nth-child(3) { margin-left: 5.5%; }
+  .kr:nth-child(4) { margin-left: 9%; }
+  .k { flex: 0 0 7%; height: 46px; box-sizing: border-box; border-radius: 5px;
+       background: #2a2a2a; color: #888; text-align: center; overflow: hidden;
+       display: flex; flex-direction: column; justify-content: center; }
+  .k b { font-size: 13px; color: #ccc; }
+  .k span { font-size: 9px; line-height: 1.1; word-break: break-all; }
+  .k.drum { background: #3a2a1a; }
+  .k.white { background: #e8e8e8; } .k.white b, .k.white span { color: #111; }
+  .k.black { background: #444; } .k.black span { color: #eee; }
+  .k.sel { outline: 2px solid #2d6cdf; }
+  .k.on { background: #e0a800 !important; }
+  .k.on b, .k.on span { color: #000 !important; }
 </style>
 </head>
 <body>
-<h1>Curly MusicKey — 키보드 테스트</h1>
-<p>1) "시작"을 누르세요. 2) K380 키를 하나씩, 그리고 여러 개를 동시에 눌러 보세요. 3) "결과 복사"로 결과를 가져가세요.</p>
-
+<h1>Curly MusicKey</h1>
 <button id="start">시작 (소리 켜기)</button>
 
 <div class="box">
-  <div class="row"><span>code</span><span id="code" class="big">-</span></div>
-  <div class="row"><span>key</span><span id="key" class="big">-</span></div>
-  <div class="row"><span>repeat</span><span id="repeat">-</span></div>
-  <div class="row"><span>isComposing</span><span id="composing">-</span></div>
-  <div class="mods">
-    <span id="m-shift">shift</span><span id="m-ctrl">ctrl</span><span id="m-alt">alt</span><span id="m-meta">meta</span>
-  </div>
+  <div class="row"><span>멜로디 악기</span><span id="inst" class="big">-</span></div>
+  <div class="row"><span>드럼 킷</span><span id="kit" class="big">-</span></div>
+  <div class="row"><span>옥타브</span><span id="oct" class="big">-</span></div>
+  <div class="row"><span>오디오</span><span id="state">시작 전</span></div>
+  <div>눌린 키: <span id="pressed">(없음)</span></div>
 </div>
 
-<div class="box">
-  <div>지금 눌린 키: <span id="pressed">(없음)</span></div>
-  <div>최대 동시 입력 수: <span id="maxSim" class="big">0</span></div>
-</div>
-
-<div class="box">
-  <div>최근 이벤트 20개</div>
-  <div id="log"></div>
-</div>
-
-<div class="box">
-  <div>환경 정보</div>
-  <pre id="env"></pre>
-</div>
-
-<button id="copy">결과 복사</button>
-<div class="box" id="copyOut">
-  <p>자동 복사에 실패했습니다. 아래 글을 길게 눌러 직접 복사하세요.</p>
-  <pre id="copyText"></pre>
-</div>
+<div class="kb" id="kb"></div>
+<p>Z줄 = 드럼 · A줄/Q줄 = 건반 · 1 베이스 / 2 리드<br>
+   ←→ 드럼 킷 전환 · ↑↓ 옥타브 · Esc 모든 소리 끄기</p>
 
 <script>
-// ---------- 상태 ----------
-let ctx = null;                 // AudioContext (시작 버튼 후 생성)
-const pressed = new Set();      // 지금 눌려 있는 키
-let maxSim = 0;                 // 최대 동시 입력 수
-const seenCodes = new Set();    // 한 번이라도 인식된 code
-const emptyCodeKeys = new Set();// code가 빈 값이었던 이벤트의 key
-let composingCount = 0;         // isComposing 또는 key==="Process" 횟수 (keydown 기준)
-const log = [];                 // 최근 이벤트 20개
-const t0 = performance.now();
+// ================= 키 배치 =================
+const DRUM_KEYS = ["KeyZ","KeyX","KeyC","KeyV","KeyB","KeyN","KeyM","Comma","Period","Slash"];
+const DRUM_NAMES = ["킥","스네어","클랩","닫힌HH","열린HH","로우탐","하이탐","림","카우벨","크래시"];
+// 건반: code → A키의 도(0)에서 몇 반음 위인지
+const NOTE_KEYS = {
+  KeyA: 0, KeyW: 1, KeyS: 2, KeyE: 3, KeyD: 4, KeyF: 5, KeyT: 6, KeyG: 7,
+  KeyY: 8, KeyH: 9, KeyU: 10, KeyJ: 11, KeyK: 12, KeyO: 13, KeyL: 14,
+  KeyP: 15, Semicolon: 16, Quote: 17, BracketRight: 18,
+};
+const NOTE_NAMES = ["도","도#","레","레#","미","파","파#","솔","솔#","라","라#","시"];
+const LETTER_NAMES = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"];
+// 악기별 A키의 MIDI 번호 (옥타브 0일 때). 60 = C4(가운데 도), 36 = C2
+const INSTS = { bass: { name: "베이스", base: 36 }, lead: { name: "리드", base: 60 } };
+const OCT_MIN = -2, OCT_MAX = 2;
+
+// ================= 상태 =================
+let ctx = null, master = null, noiseBuf = null;
+let inst = "lead";        // 지금 선택된 멜로디 악기
+let kitIndex = 0;         // 0 = 808, 1 = 909
+let octave = 0;           // 옥타브 이동 (-2 ~ +2)
+const pressed = new Set();  // 지금 눌린 키(code)
+const held = new Map();     // 누르고 있는 건반 code → 울리는 소리
+const active = new Set();   // 지금 울리는 모든 소리 (Esc용)
 
 const $ = id => document.getElementById(id);
 
-// ---------- 소리 ----------
-// code 문자열로 0~35 사이 숫자를 만들어, 220Hz부터 반음씩 올린 음을 낸다.
-function pitchFor(name) {
-  let h = 0;
-  for (const ch of name) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
-  return 220 * Math.pow(2, (h % 36) / 12);
+// ================= 오디오 기본 =================
+// 모든 소리 → master(음량) → 컴프레서(리미터처럼 강하게) → 스피커
+function initAudio(c) {
+  ctx = c;
+  const comp = ctx.createDynamicsCompressor();
+  comp.threshold.value = -12;
+  comp.knee.value = 0;
+  comp.ratio.value = 20;
+  comp.attack.value = 0.002;
+  comp.release.value = 0.15;
+  master = ctx.createGain();
+  master.gain.value = 0.5;
+  master.connect(comp).connect(ctx.destination);
+  // 화이트 노이즈 1초 (스네어, 하이햇, 클랩 재료)
+  noiseBuf = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
+  const d = noiseBuf.getChannelData(0);
+  for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
 }
 
-function beep(name) {
-  if (!ctx || ctx.state !== "running") return;
+// 울리는 소리를 기록해 두고, 끝나면 지운다
+function track(g, srcs) {
+  const v = { g, srcs };
+  active.add(v);
+  srcs[0].onended = () => active.delete(v);
+  return v;
+}
+
+function stopAll() {
   const t = ctx.currentTime;
-  const osc = ctx.createOscillator();
-  const gain = ctx.createGain();
-  osc.type = "square";
-  osc.frequency.value = pitchFor(name);
-  gain.gain.setValueAtTime(0.2, t);
-  gain.gain.exponentialRampToValueAtTime(0.001, t + 0.12);
-  osc.connect(gain).connect(ctx.destination);
-  osc.start(t);
-  osc.stop(t + 0.13);
+  for (const v of active) {
+    v.g.gain.cancelScheduledValues(t);
+    v.g.gain.setValueAtTime(v.g.gain.value, t);
+    v.g.gain.linearRampToValueAtTime(0, t + 0.02);  // 0으로 바로 떨어뜨리면 '틱' 소리가 나서 20ms
+    v.srcs.forEach(s => { try { s.stop(t + 0.03); } catch (e) {} });
+  }
+  held.clear();
 }
 
+// ================= 드럼 재료 3가지 =================
+// 1) 음높이가 f0 → f1로 내려가는 오실레이터 (킥, 탐, 스네어 몸통, 림, 카우벨)
+function tone(t, { type = "sine", f0, f1 = f0, drop = 0.05, dur, vol, filter }) {
+  const o = ctx.createOscillator(), g = ctx.createGain();
+  o.type = type;
+  o.frequency.setValueAtTime(f0, t);
+  if (f1 !== f0) o.frequency.exponentialRampToValueAtTime(f1, t + drop);
+  g.gain.setValueAtTime(vol, t);
+  g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  let out = o;
+  if (filter) {
+    const f = ctx.createBiquadFilter();
+    f.type = filter[0]; f.frequency.value = filter[1];
+    out = o.connect(f);
+  }
+  out.connect(g).connect(master);
+  o.start(t); o.stop(t + dur);
+  track(g, [o]);
+}
+
+// 2) 필터를 거친 노이즈 (스네어 '촤', 하이햇, 크래시)
+function noise(t, { type = "highpass", freq, Q = 1, dur, vol }) {
+  const s = ctx.createBufferSource(), f = ctx.createBiquadFilter(), g = ctx.createGain();
+  s.buffer = noiseBuf; s.loop = true;
+  f.type = type; f.frequency.value = freq; f.Q.value = Q;
+  g.gain.setValueAtTime(vol, t);
+  g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  s.connect(f).connect(g).connect(master);
+  s.start(t); s.stop(t + dur);
+  track(g, [s]);
+}
+
+// 3) 사각파 6개를 겹친 쇳소리 (808 하이햇·심벌 방식)
+const METAL = [205.3, 304.4, 369.6, 522.7, 540, 800];
+function metal(t, { hp, dur, vol }) {
+  const f = ctx.createBiquadFilter(), g = ctx.createGain();
+  f.type = "highpass"; f.frequency.value = hp;
+  g.gain.setValueAtTime(vol, t);
+  g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  f.connect(g).connect(master);
+  const oscs = METAL.map(fr => {
+    const o = ctx.createOscillator();
+    o.type = "square"; o.frequency.value = fr;
+    o.connect(f); o.start(t); o.stop(t + dur);
+    return o;
+  });
+  track(g, oscs);
+}
+
+// 클랩: 노이즈를 짧게 3번 끊어 친 뒤 꼬리를 남긴다
+function clap(t, freq, tail, vol) {
+  const s = ctx.createBufferSource(), f = ctx.createBiquadFilter(), g = ctx.createGain();
+  s.buffer = noiseBuf; s.loop = true;
+  f.type = "bandpass"; f.frequency.value = freq; f.Q.value = 1.5;
+  g.gain.setValueAtTime(0, t);
+  for (const d of [0, 0.012, 0.024]) {
+    g.gain.setValueAtTime(vol, t + d);
+    g.gain.exponentialRampToValueAtTime(0.05, t + d + 0.01);
+  }
+  g.gain.setValueAtTime(vol, t + 0.036);
+  g.gain.exponentialRampToValueAtTime(0.001, t + 0.036 + tail);
+  s.connect(f).connect(g).connect(master);
+  s.start(t); s.stop(t + 0.04 + tail);
+  track(g, [s]);
+}
+
+// ================= 드럼 킷 2개 (순서 = DRUM_NAMES) =================
+const KITS = [
+  { name: "808", hits: [
+    t => tone(t, { f0: 150, f1: 45, drop: 0.08, dur: 0.9, vol: 1 }),
+    t => { tone(t, { type: "triangle", f0: 185, dur: 0.15, vol: 0.5 });
+           tone(t, { f0: 330, dur: 0.1, vol: 0.3 });
+           noise(t, { freq: 1500, dur: 0.18, vol: 0.4 }); },
+    t => clap(t, 1000, 0.25, 0.8),
+    t => metal(t, { hp: 7000, dur: 0.05, vol: 0.4 }),
+    t => metal(t, { hp: 7000, dur: 0.4, vol: 0.35 }),
+    t => tone(t, { f0: 110, f1: 80, drop: 0.3, dur: 0.5, vol: 0.8 }),
+    t => tone(t, { f0: 200, f1: 150, drop: 0.3, dur: 0.4, vol: 0.7 }),
+    t => { tone(t, { type: "triangle", f0: 1700, dur: 0.03, vol: 0.5 });
+           tone(t, { f0: 480, dur: 0.03, vol: 0.3 }); },
+    t => { tone(t, { type: "square", f0: 540, dur: 0.3, vol: 0.25, filter: ["bandpass", 800] });
+           tone(t, { type: "square", f0: 800, dur: 0.3, vol: 0.25, filter: ["bandpass", 800] }); },
+    t => { metal(t, { hp: 5000, dur: 1.5, vol: 0.25 });
+           noise(t, { freq: 6000, dur: 1.2, vol: 0.2 }); },
+  ]},
+  { name: "909", hits: [
+    t => { tone(t, { f0: 230, f1: 55, drop: 0.04, dur: 0.45, vol: 1 });
+           noise(t, { freq: 3000, dur: 0.015, vol: 0.3 }); },  // 909 킥의 '딱' 하는 어택
+    t => { tone(t, { type: "triangle", f0: 200, f1: 185, drop: 0.05, dur: 0.12, vol: 0.4 });
+           noise(t, { freq: 2500, dur: 0.25, vol: 0.6 }); },
+    t => clap(t, 1300, 0.35, 0.8),
+    t => noise(t, { freq: 9000, dur: 0.06, vol: 0.5 }),
+    t => noise(t, { freq: 8500, dur: 0.45, vol: 0.4 }),
+    t => { tone(t, { f0: 140, f1: 95, drop: 0.15, dur: 0.35, vol: 0.8 });
+           noise(t, { type: "bandpass", freq: 400, dur: 0.05, vol: 0.2 }); },
+    t => { tone(t, { f0: 260, f1: 180, drop: 0.15, dur: 0.3, vol: 0.7 });
+           noise(t, { type: "bandpass", freq: 700, dur: 0.05, vol: 0.2 }); },
+    t => { noise(t, { type: "bandpass", freq: 2500, Q: 8, dur: 0.025, vol: 0.9 });
+           tone(t, { type: "triangle", f0: 1000, dur: 0.02, vol: 0.3 }); },
+    t => { tone(t, { type: "square", f0: 587, dur: 0.15, vol: 0.25, filter: ["bandpass", 900] });
+           tone(t, { type: "square", f0: 845, dur: 0.15, vol: 0.25, filter: ["bandpass", 900] }); },
+    t => { noise(t, { freq: 4000, dur: 1.8, vol: 0.35 });
+           metal(t, { hp: 6000, dur: 1.2, vol: 0.15 }); },
+  ]},
+];
+
+// ================= 멜로디 악기 =================
+// 누르는 동안 울리고(noteOn), 떼면 꺼진다(noteOff)
+function noteOn(code, midi) {
+  const t = ctx.currentTime;
+  const f = 440 * Math.pow(2, (midi - 69) / 12);
+  const g = ctx.createGain(), flt = ctx.createBiquadFilter();
+  flt.type = "lowpass";
+  const oscs = [];
+  const osc = (type, freq, detune) => {
+    const o = ctx.createOscillator();
+    o.type = type; o.frequency.value = freq; o.detune.value = detune;
+    o.connect(flt); o.start(t); oscs.push(o);
+  };
+  let peak, attack, release;
+  if (inst === "bass") {
+    // 톱니파 2개(살짝 어긋나게) + 한 옥타브 아래 사각파, 필터가 빠르게 닫히며 '뭉' 소리
+    osc("sawtooth", f, -8); osc("sawtooth", f, 8); osc("square", f / 2, 0);
+    flt.Q.value = 6;
+    flt.frequency.setValueAtTime(3000, t);
+    flt.frequency.exponentialRampToValueAtTime(400, t + 0.25);
+    peak = 0.3; attack = 0.005; release = 0.08;
+  } else {
+    // 톱니파 3개를 조금씩 어긋나게 겹친 두꺼운 리드
+    osc("sawtooth", f, -10); osc("sawtooth", f, 0); osc("sawtooth", f, 10);
+    flt.Q.value = 1;
+    flt.frequency.value = 5000;
+    peak = 0.15; attack = 0.01; release = 0.2;
+  }
+  g.gain.setValueAtTime(0, t);
+  g.gain.linearRampToValueAtTime(peak, t + attack);
+  flt.connect(g).connect(master);
+  const v = track(g, oscs);
+  v.release = release;
+  held.set(code, v);
+}
+
+function noteOff(code) {
+  const v = held.get(code);
+  if (!v) return;
+  held.delete(code);
+  const t = ctx.currentTime;
+  v.g.gain.cancelScheduledValues(t);
+  v.g.gain.setValueAtTime(v.g.gain.value, t);
+  v.g.gain.linearRampToValueAtTime(0, t + v.release);
+  v.srcs.forEach(s => s.stop(t + v.release + 0.01));
+}
+
+// ================= 키 입력 =================
+function onKeyDown(e) {
+  if (e.metaKey) return;  // Cmd 조합은 iOS 몫으로 남겨 둔다
+  e.preventDefault();     // 스크롤, 포커스 이동 등 기본 동작 막기
+  if (e.repeat) return;   // 꾹 누를 때 생기는 반복 입력 무시
+  const code = e.code;
+  pressed.add(code);
+
+  if (code === "Digit1") inst = "bass";
+  else if (code === "Digit2") inst = "lead";
+  else if (code === "ArrowLeft" || code === "ArrowRight") kitIndex = 1 - kitIndex;
+  else if (code === "ArrowUp") octave = Math.min(OCT_MAX, octave + 1);
+  else if (code === "ArrowDown") octave = Math.max(OCT_MIN, octave - 1);
+  else if (ctx && ctx.state === "running") {
+    const d = DRUM_KEYS.indexOf(code);
+    if (d >= 0) KITS[kitIndex].hits[d](ctx.currentTime);
+    else if (code in NOTE_KEYS) noteOn(code, INSTS[inst].base + octave * 12 + NOTE_KEYS[code]);
+    else if (code === "Escape") stopAll();
+  }
+  render();
+}
+
+function onKeyUp(e) {
+  if (e.metaKey) return;
+  e.preventDefault();
+  pressed.delete(e.code);
+  if (ctx) noteOff(e.code);
+  render();
+}
+
+window.addEventListener("keydown", onKeyDown);
+window.addEventListener("keyup", onKeyUp);
+
+// ================= 시작 버튼 / iOS 대응 =================
 $("start").addEventListener("click", async () => {
-  // iOS 무음 스위치가 켜져 있어도 소리가 나도록 (지원하는 브라우저만)
   if (navigator.audioSession) {
     try { navigator.audioSession.type = "playback"; } catch (e) {}
   }
   if (!ctx) {
-    ctx = new (window.AudioContext || window.webkitAudioContext)();
-    ctx.addEventListener("statechange", renderEnv);
+    initAudio(new (window.AudioContext || window.webkitAudioContext)());
+    ctx.addEventListener("statechange", render);
   }
   await ctx.resume();
-  $("start").textContent = "소리 켜짐 (" + ctx.state + ")";
-  $("start").classList.add("on");
-  $("start").blur();  // 버튼에 포커스가 남으면 Space/Enter가 버튼을 누르게 됨
-  renderEnv();
-  beep("start");
+  $("start").blur();
+  render();
 });
 
-// ---------- 키 이벤트 ----------
-function onKey(e) {
-  const down = e.type === "keydown";
-  const id = e.code || ("(빈 code) " + e.key);
-
-  if (e.code) seenCodes.add(e.code);
-  else emptyCodeKeys.add(e.key);
-
-  if (down) {
-    if (e.isComposing || e.key === "Process") composingCount++;
-    pressed.add(id);
-    if (pressed.size > maxSim) maxSim = pressed.size;
-    if (!e.repeat) beep(id);
-  } else {
-    pressed.delete(id);
+// 다른 앱에 갔다가 돌아왔을 때 오디오가 멈춰 있으면 다시 켠다
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible" && ctx && ctx.state !== "running") {
+    ctx.resume().then(render);
   }
+});
 
-  // Cmd 조합은 막지 않는다 (iOS/맥 시스템 단축키는 어차피 못 막고, 새로고침 등은 남겨 둠)
-  if (!e.metaKey) e.preventDefault();
+// ================= 화면 =================
+const ROWS = [
+  [["Backquote","`"],["Digit1","1"],["Digit2","2"],["Digit3","3"],["Digit4","4"],["Digit5","5"],
+   ["Digit6","6"],["Digit7","7"],["Digit8","8"],["Digit9","9"],["Digit0","0"],["Minus","-"],["Equal","="]],
+  [["KeyQ","Q"],["KeyW","W"],["KeyE","E"],["KeyR","R"],["KeyT","T"],["KeyY","Y"],["KeyU","U"],
+   ["KeyI","I"],["KeyO","O"],["KeyP","P"],["BracketLeft","["],["BracketRight","]"],["Backslash","\\"]],
+  [["KeyA","A"],["KeyS","S"],["KeyD","D"],["KeyF","F"],["KeyG","G"],["KeyH","H"],["KeyJ","J"],
+   ["KeyK","K"],["KeyL","L"],["Semicolon",";"],["Quote","'"]],
+  [["KeyZ","Z"],["KeyX","X"],["KeyC","C"],["KeyV","V"],["KeyB","B"],["KeyN","N"],["KeyM","M"],
+   ["Comma",","],["Period","."],["Slash","/"]],
+];
 
-  // 화면 갱신
-  $("code").textContent = JSON.stringify(e.code);
-  $("key").textContent = JSON.stringify(e.key);
-  $("repeat").textContent = e.repeat;
-  $("composing").textContent = e.isComposing;
-  $("m-shift").classList.toggle("on", e.shiftKey);
-  $("m-ctrl").classList.toggle("on", e.ctrlKey);
-  $("m-alt").classList.toggle("on", e.altKey);
-  $("m-meta").classList.toggle("on", e.metaKey);
+// 안내도는 한 번만 만들고, 이후에는 글자와 강조만 바꾼다
+const keyEls = {};
+for (const row of ROWS) {
+  const r = document.createElement("div");
+  r.className = "kr";
+  for (const [code, ch] of row) {
+    const k = document.createElement("div");
+    k.className = "k";
+    k.innerHTML = "<b></b><span></span>";
+    k.firstChild.textContent = ch;
+    r.appendChild(k);
+    keyEls[code] = k;
+  }
+  $("kb").appendChild(r);
+}
+
+function render() {
+  const kit = KITS[kitIndex];
+  const baseMidi = INSTS[inst].base + octave * 12;
+  for (const code in keyEls) {
+    const k = keyEls[code];
+    let label = "", cls = "k";
+    const d = DRUM_KEYS.indexOf(code);
+    if (d >= 0) { label = DRUM_NAMES[d]; cls += " drum"; }
+    else if (code in NOTE_KEYS) {
+      const n = NOTE_KEYS[code] % 12;
+      label = NOTE_NAMES[n];
+      cls += NOTE_NAMES[n].includes("#") ? " black" : " white";
+    }
+    else if (code === "Digit1") { label = "베이스"; if (inst === "bass") cls += " sel"; }
+    else if (code === "Digit2") { label = "리드"; if (inst === "lead") cls += " sel"; }
+    if (pressed.has(code)) cls += " on";
+    k.className = cls;
+    k.lastChild.textContent = label;
+  }
+  $("inst").textContent = INSTS[inst].name;
+  $("kit").textContent = kit.name;
+  const sign = octave > 0 ? "+" : "";
+  $("oct").textContent = `${sign}${octave} (A = ${LETTER_NAMES[0]}${Math.floor(baseMidi / 12) - 1})`;
+  $("state").textContent = ctx ? ctx.state : "시작 전";
   $("pressed").textContent = pressed.size ? [...pressed].join(", ") : "(없음)";
-  $("maxSim").textContent = maxSim;
-
-  const ms = Math.round(performance.now() - t0);
-  log.unshift(`${ms}ms ${down ? "↓" : "↑"} code=${JSON.stringify(e.code)} key=${JSON.stringify(e.key)}`
-              + (e.repeat ? " R" : "") + (e.isComposing ? " C" : ""));
-  if (log.length > 20) log.pop();
-  $("log").textContent = log.join("\n");
-
-  renderEnv();
-}
-window.addEventListener("keydown", onKey);
-window.addEventListener("keyup", onKey);
-
-// ---------- 환경 정보 ----------
-function envText() {
-  const lines = ["userAgent: " + navigator.userAgent];
-  if (!ctx) {
-    lines.push("AudioContext: 아직 시작 안 함");
-  } else {
-    lines.push("AudioContext 상태: " + ctx.state);
-    lines.push("sampleRate: " + ctx.sampleRate);
-    if (ctx.baseLatency !== undefined) lines.push("baseLatency: " + ctx.baseLatency + " s");
-    if (ctx.outputLatency !== undefined) lines.push("outputLatency: " + ctx.outputLatency + " s");
+  if (ctx) {
+    $("start").textContent = ctx.state === "running" ? "소리 켜짐" : "다시 켜기 (" + ctx.state + ")";
+    $("start").classList.toggle("on", ctx.state === "running");
   }
-  lines.push("audioSession 지원: " + (navigator.audioSession ? "예 (" + navigator.audioSession.type + ")" : "아니오"));
-  return lines.join("\n");
 }
-function renderEnv() { $("env").textContent = envText(); }
-renderEnv();
-
-// ---------- 결과 복사 ----------
-function resultText() {
-  return [
-    "Curly MusicKey 키보드 테스트 결과",
-    "시각: " + new Date().toISOString(),
-    "",
-    `인식된 code (${seenCodes.size}개): ` + ([...seenCodes].join(", ") || "(없음)"),
-    "code가 빈 이벤트의 key: " + ([...emptyCodeKeys].map(k => JSON.stringify(k)).join(", ") || "(없음)"),
-    "isComposing=true 또는 key=\"Process\" 횟수 (keydown 기준): " + composingCount,
-    "최대 동시 입력 수: " + maxSim,
-    "",
-    "[환경]",
-    envText(),
-  ].join("\n");
-}
-
-$("copy").addEventListener("click", async () => {
-  $("copy").blur();
-  const text = resultText();
-  try {
-    await navigator.clipboard.writeText(text);
-    $("copy").textContent = "복사됨 ✓ (다시 누르면 새로 복사)";
-    $("copyOut").style.display = "none";
-  } catch (e) {
-    $("copy").textContent = "복사 실패 — 아래 글을 직접 복사하세요";
-    $("copyText").textContent = text;
-    $("copyOut").style.display = "block";
-  }
-});
+render();
 </script>
 </body>
 </html>
