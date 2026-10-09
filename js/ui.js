@@ -72,7 +72,7 @@ function ctrlKey(code, shift, ready) {
   else if (!ready) return;
   else if (code === "KeyP") evoPlay ? stopPlay() : startEvo();
   else if (code === "KeyB") startBeatbox();
-  else if (USER_KEYS.includes(code)) toggleSampleRec(USER_KEYS.indexOf(code));
+  else if (USER_KEYS.includes(code)) sampleKeyDown(USER_KEYS.indexOf(code));
 }
 
 function altKey(code) {
@@ -152,6 +152,7 @@ function userPad(n) {
 }
 
 function onKeyUp(e) {
+  if (USER_KEYS.includes(e.code)) sampleKeyUp();   // 내 소리 녹음: 누르고 있다가 떼면 완료
   // 맥은 ⌘를 누르고 있는 동안 다른 키를 떼도 keyup을 보내지 않는다 → ⌘를 뗄 때 눌림 표시를 정리
   if (e.code === "MetaLeft" || e.code === "MetaRight") {
     for (const c of [...pressed]) if (!held.has(c) && !/Shift|Alt|Control/.test(c)) pressed.delete(c);
@@ -524,11 +525,13 @@ function render() {
   $("chipMet").textContent = t("met");
   $("chipMet").classList.toggle("on", metronome);
   const mode = evoPlay ? `${t("evo")} ${evoPlay.i + 1}/${proj.evo.length}` : edit.on ? t("edit")
-             : beatbox.state ? "BEATBOX" : mic.mode === "sample" ? "MIC" : "";
+             : beatbox.state ? "BEATBOX" : mic.mode === "sample" ? `● ${((performance.now() - mic.recAt) / 1000).toFixed(1)}s` : "";
   $("chipMode").textContent = mode;
   $("chipMode").style.display = mode ? "" : "none";
   $("shiftChip").textContent = `${t("shiftFx")} ${proj.bank + 1}/${FX_BANKS.length} ${t("banks")[proj.bank]}`;
   $("shiftChip").classList.toggle("on", sh);
+  // 알림이 떠 있으면 효과음 칩을 잠깐 숨겨 알림이 한 줄을 다 쓰게 (Shift를 누르면 다시 보임)
+  $("shiftChip").style.display = $("msg").classList.contains("show") && !sh ? "none" : "";
 }
 
 // ---------- 알림 한 줄 ----------
@@ -536,8 +539,9 @@ let toastTimer = null;
 function toast(msg, ms = 1800) {
   $("msg").textContent = msg;
   $("msg").classList.add("show");
+  if (!shiftHeld()) $("shiftChip").style.display = "none";
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => $("msg").classList.remove("show"), ms);
+  toastTimer = setTimeout(() => { $("msg").classList.remove("show"); render(); }, ms);
 }
 
 // ---------- 도움말 / 내보내기 창 ----------

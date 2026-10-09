@@ -112,23 +112,54 @@ function micStop() {
   if (mic.stream) mic.stream.getTracks().forEach(tr => tr.stop());
   mic.stream = null; mic.node = null; mic.mode = null;
   clearTimeout(mic.timer);
+  clearInterval(mic.ticker);
   if (navigator.audioSession) navigator.audioSession.type = "playback";
 }
 
 // ---------- 내 소리 녹음 (Ctrl + I / [ / \) ----------
+// 누르고 있는 동안 녹음하고 키를 떼면 완료. 짧게 톡 누르면 손을 떼도 계속 녹음하고, 같은 키를 다시 누르면 완료.
+// 녹음 중에는 경과 시간과 소리 크기 막대를 보여 준다.
 const SAMPLE_MAX_SEC = 30;
 const CHOP_MIN_SEC = 4;      // 이보다 길면 조각 모드
-async function toggleSampleRec(n) {
-  if (mic.mode === "sample") { finishSample(); return; }
+const HOLD_MS = 400;         // 이보다 오래 누르고 있다가 떼면 '누르는 동안 녹음'
+const recKey = { down: false, at: 0, hold: false };
+
+async function sampleKeyDown(n) {
+  if (mic.mode === "sample") { finishSample(); return; }   // 톡 눌러 시작한 녹음 → 다시 누르면 완료
   if (mic.mode) return;
-  if (!(await micStart("sample"))) return;
+  Object.assign(recKey, { down: true, at: performance.now(), hold: false });
+  if (!(await micStart("sample"))) { recKey.down = false; return; }
+  // 아이폰 첫 사용 때는 마이크 허락 창이 뜬다. 그사이 길게 눌렀던 키를 이미 뗐다면 녹음하지 않는다
+  if (!recKey.down && recKey.hold) { micStop(); toast(t("micReady"), 3000); render(); return; }
   mic.slot = n;
-  toast(t("micRec")(trackShort("u" + n)), 60000);
+  mic.recAt = performance.now();
   mic.timer = setTimeout(finishSample, SAMPLE_MAX_SEC * 1000);
+  mic.ticker = setInterval(showRecProgress, 100);
+  showRecProgress();
+  render();
+}
+
+function sampleKeyUp() {
+  if (!recKey.down) return;
+  recKey.down = false;
+  recKey.hold = performance.now() - recKey.at >= HOLD_MS;
+  if (recKey.hold && mic.mode === "sample") finishSample();   // 누르고 있다가 뗌 → 완료
+}
+
+// 녹음 중 표시: "● U1 녹음 중 3.4초 / 30초 ▮▮▮▯▯▯▯▯ 키를 떼면 완료"
+function showRecProgress() {
+  const sec = (performance.now() - mic.recAt) / 1000;
+  const last = mic.chunks[mic.chunks.length - 1];
+  let rms = 0;
+  if (last) { for (const x of last.data) rms += x * x; rms = Math.sqrt(rms / last.data.length); }
+  const bars = Math.min(8, Math.round(Math.sqrt(rms) * 16));
+  const meter = "▮".repeat(bars) + "▯".repeat(8 - bars);
+  toast(t("micRec")(trackShort("u" + mic.slot), sec.toFixed(1), SAMPLE_MAX_SEC, meter, recKey.down), 1000);
   render();
 }
 
 function finishSample() {
+  if (mic.mode !== "sample") return;
   const n = mic.slot, rate = ctx.sampleRate;
   const all = concat(mic.chunks.map(c => c.data));
   micStop();
@@ -153,7 +184,8 @@ function finishSample() {
   dbPut("samples", n, { data, rate, meta: SAMPLE_META[n] }).catch(e => console.warn(e));
   proj.track = "u" + n;
   focus = proj.track;
-  toast(t("micDone")(trackShort(proj.track)));
+  // 완료 알림: 실제로 저장된 길이(앞뒤 무음을 자른 뒤)와 어떤 모드가 됐는지
+  toast(t("micDone")(trackShort(proj.track), (data.length / rate).toFixed(1), SAMPLE_META[n].kind === "chop"), 3500);
   startSample(n, 60, ctx.currentTime);
   render();
 }
