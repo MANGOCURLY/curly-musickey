@@ -614,8 +614,11 @@ function stopVoice(v, t) {
 // kind "pitch" = 짧은 소리. A키(옥타브 0)가 원래 높이, 다른 건반은 재생 속도로 음높이를 바꾼다
 // kind "chop"  = 긴 소리·노래. 구간(16박) 안을 1박씩 16조각으로 잘라 A~P 키에 둔다
 //   midi 60~75 = 조각 1~16, 76 = 구간 전체
-const SAMPLES = [null, null, null];
-const SAMPLE_META = [null, null, null];   // {kind, name, bpm(원곡), start(구간 시작 초), match(속도 맞추기)}
+// kind "voice" = 4번째 칸(보이스, Ctrl+V로 녹음). 부른 음높이(f0)를 찾아 두어 A키가 정확히 '도'가 되게 하고,
+//   누르고 있는 동안 가운데 부분(loopA~loopB)을 반복해서 목소리가 끊기지 않게 한다
+const SAMPLES = [null, null, null, null];
+const SAMPLE_META = [null, null, null, null];   // {kind, name, bpm(원곡), start(구간 시작 초), match(속도 맞추기)} / 보이스: {kind, f0, loopA, loopB}
+const VOICE_SLOT = 3;
 const CHOP_SLICES = 16, CHOP_WHOLE = 76;
 const isChop = slot => !!SAMPLES[slot] && (SAMPLE_META[slot] || {}).kind === "chop";
 // 속도 맞추기: 원곡 BPM → 지금 BPM 비율로 재생 속도를 바꾼다 (음높이도 같이 바뀐다)
@@ -639,15 +642,19 @@ function startSample(slot, midi, t) {
     s.start(t, offset, dur);
     g.gain.setValueAtTime(0.9, Math.max(t + 0.004, end - 0.006));  // 조각 끝에서 '틱' 소리가 나지 않게 살짝 줄인다
     g.gain.linearRampToValueAtTime(0, end);
+  } else if (m.kind === "voice") {
+    s.playbackRate.value = Math.pow(2, (midi - m.f0) / 12);
+    if (m.loopB > m.loopA) { s.loop = true; s.loopStart = m.loopA; s.loopEnd = m.loopB; }
+    s.start(t);
   } else {
     s.playbackRate.value = Math.pow(2, (midi - 60) / 12);
     s.start(t);
   }
   s.connect(g);
   g.connect(master);
-  g.connect(gainNode(0.15)).connect(verbIn);
+  g.connect(gainNode(m.kind === "voice" ? 0.25 : 0.15)).connect(verbIn);
   const v = track(g, [s]);
-  Object.assign(v, { start: t, attack: 0.003, release: 0.08 });
+  Object.assign(v, { start: t, attack: 0.003, release: m.kind === "voice" ? 0.15 : 0.08 });
   return v;
 }
 
@@ -667,13 +674,14 @@ function startNote(id, midi, t) {
 function trackName(id) {
   if (id[0] === "i") return t("insts")[+id.slice(1)];
   if (id[0] === "r") return t("randomTone") + " " + id.slice(1);
+  if (+id.slice(1) === VOICE_SLOT) return t("voice");
   const m = SAMPLE_META[+id.slice(1)];
   return m && m.name ? m.name : t("user") + " " + (+id.slice(1) + 1);   // 불러온 노래는 파일 이름
 }
 function trackShort(id) {
   if (id[0] === "i") return t("instShort")[+id.slice(1)];
   if (id[0] === "r") return "R" + id.slice(1);
-  return "U" + (+id.slice(1) + 1);
+  return +id.slice(1) === VOICE_SLOT ? "V" : "U" + (+id.slice(1) + 1);
 }
 // 화면 색 묶음: 베이스(1~4) / 멜로디(5~0) / 랜덤 / 내 소리
 function trackGroup(id) {

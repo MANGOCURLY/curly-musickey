@@ -44,12 +44,13 @@ function onKeyDown(e) {
   const code = e.code;
   pressed.add(code);
   if (noticeMsg) { noticeMsg = null; renderOverlay(); return; }   // 안내 창은 아무 키나 누르면 닫힌다
+  if (slotUI.open) { slotKey(code, e.shiftKey); return; }
   if (exportUI.open) { exportKey(code); return; }
   if (helpOpen) { if (code === "Escape" || code === "Backquote") toggleHelp(); return; }
 
   const ready = ctx && ctx.state === "running";
   if (ctrl) ctrlKey(code, e.shiftKey, ready);
-  else if (e.altKey) altKey(code);
+  else if (e.altKey) altKey(code, e.shiftKey);
   else if (!(edit.on && editKey(code, e.shiftKey, ready))) plainKey(code, e.shiftKey, ready);
   render();
 }
@@ -70,13 +71,21 @@ function ctrlKey(code, shift, ready) {
   else if (code === "Equal") holdBpm(code, 20);
   else if (code === "Backspace") clearFocus();
   else if (code === "KeyE") openExport();
+  else if (code === "KeyO") openSlots();
   else if (!ready) return;
   else if (code === "KeyP") evoPlay ? stopPlay() : startEvo();
   else if (code === "KeyB") startBeatbox();
   else if (USER_KEYS.includes(code)) sampleKeyDown(USER_KEYS.indexOf(code));
+  else if (code === "KeyV") sampleKeyDown(VOICE_SLOT);   // 보이스: 누른 채로 목소리 녹음
 }
 
-function altKey(code) {
+function altKey(code, shift) {
+  if (code === "Equal" || code === "Minus") { shift && code === "Equal" ? setBaseBpm() : resetBpm(); return; }
+  if (code === "KeyV") {   // 보이스 악기 고르기
+    proj.track = "u" + VOICE_SLOT; focus = proj.track; scheduleSave();
+    if (!SAMPLES[VOICE_SLOT]) toast(t("voiceEmpty"), 4000);
+    return;
+  }
   if (code === "ArrowLeft") setKey(-1);
   else if (code === "ArrowRight") setKey(1);
   else if (code === "ArrowUp") setDensity(1);
@@ -99,6 +108,8 @@ function plainKey(code, shift, ready) {
   else if (code === "ArrowUp") { proj.octave = Math.min(OCT_MAX, proj.octave + 1); scheduleSave(); }
   else if (code === "ArrowDown") { proj.octave = Math.max(OCT_MIN, proj.octave - 1); scheduleSave(); }
   else if (code === "Backquote") shift ? toggleHelp() : toggleViz();
+  // - 와 = 를 같이 누르면 기준 BPM으로
+  else if ((code === "Minus" && pressed.has("Equal")) || (code === "Equal" && pressed.has("Minus"))) resetBpm();
   else if (code === "Minus") holdBpm(code, shift ? -5 : -1);
   else if (code === "Equal") holdBpm(code, shift ? 5 : 1);
   else if (code === "Tab") metronome = !metronome;
@@ -153,7 +164,7 @@ function userPad(n) {
 }
 
 function onKeyUp(e) {
-  if (USER_KEYS.includes(e.code)) sampleKeyUp();   // 내 소리 녹음: 누르고 있다가 떼면 완료
+  if (USER_KEYS.includes(e.code) || e.code === "KeyV") sampleKeyUp();   // 내 소리·보이스 녹음: 누르고 있다가 떼면 완료
   // 맥은 ⌘를 누르고 있는 동안 다른 키를 떼도 keyup을 보내지 않는다 → ⌘를 뗄 때 눌림 표시를 정리
   if (e.code === "MetaLeft" || e.code === "MetaRight") {
     for (const c of [...pressed]) if (!held.has(c) && !/Shift|Alt|Control/.test(c)) pressed.delete(c);
@@ -476,7 +487,7 @@ function render() {
   }
 
   const id = proj.track, grp = trackGroup(id);
-  const num = id[0] === "i" ? String((+id.slice(1) + 1) % 10) : id[0] === "r" ? "R" : "U" + (+id.slice(1) + 1);
+  const num = id[0] === "i" ? String((+id.slice(1) + 1) % 10) : id[0] === "r" ? "R" : trackShort(id);
   for (const [n, nm] of [["instNum", "instName"], ["vNum", "vName"]]) {
     $(n).textContent = num;
     $(n).className = "num " + grp;
@@ -562,7 +573,19 @@ function helpHTML() {
 function renderOverlay() {
   $("side").innerHTML = helpHTML();
   const o = $("overlay");
-  if (noticeMsg) {
+  if (slotUI.open) {
+    o.style.display = "flex";
+    const when = ms => new Date(ms).toLocaleString(lang === "ko" ? "ko-KR" : "en-US", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
+    const card = (p, n) => {
+      const cls = "slotc" + (n === slotUI.cur ? " cur" : "") + (n === slot ? " now" : "") + (slotUI.delArm === n ? " del" : "");
+      const info = p && p.events && p.events.length
+        ? `${esc(t("kits")[p.kit || 0])} · ${p.bpm} BPM<br>${p.bars}${t("barUnit")} · ${p.events.length}${t("hits")}${p.saved ? "<br>" + when(p.saved) : ""}`
+        : `<span class="dim">${t("slotEmpty")}</span>`;
+      return `<div class="${cls}" data-slot="${n}"><b>${n}</b><span>${info}</span></div>`;
+    };
+    o.innerHTML = `<div class="panel wide"><h2>${t("slots")}</h2><div class="slotgrid">${slotUI.items.map((p, i) => card(p, i + 1)).join("")}</div>
+      <p class="msgline">${slotUI.delArm ? esc(t("slotDelConfirm")(slotUI.delArm)) : ""}</p><p class="dim">${t("slotsHelp")}</p></div>`;
+  } else if (noticeMsg) {
     o.style.display = "flex";
     o.innerHTML = `<div class="panel"><p class="noticeTxt">${esc(noticeMsg)}</p><p class="dim">${t("noticeClose")}</p></div>`;
   } else if (helpOpen) {
@@ -590,7 +613,9 @@ $("optEvo").addEventListener("click", () => { evoEnabled = !evoEnabled; try { lo
 $("optKb").addEventListener("click", () => { $("optKb").blur(); toggleKb(); });
 // 도움말 창 안의 키보드 바꾸기 버튼 (창은 다시 그려지므로 overlay에서 받는다)
 $("overlay").addEventListener("click", e => {
-  if (e.target.closest(".kbsel")) { e.target.blur(); toggleKb(); }
+  const sc = e.target.closest("[data-slot]");
+  if (sc && slotUI.open) pickSlot(+sc.dataset.slot);
+  else if (e.target.closest(".kbsel")) { e.target.blur(); toggleKb(); }
   else if (noticeMsg) { noticeMsg = null; renderOverlay(); }
 });
 $("side").addEventListener("click", e => { if (e.target.closest(".kbsel")) { e.target.blur(); toggleKb(); } });
@@ -628,6 +653,10 @@ $("file").addEventListener("change", async () => {
   $("file").blur();       // 포커스가 남으면 Space·Enter가 파일 창을 다시 연다
   await importFile(f);    // 소리를 켜기 전이어도 불러오기는 된다
 });
+
+// LCD의 '슬롯 n'을 탭하면 슬롯 목록, BPM 숫자를 탭하면 기준 BPM으로
+$("slotInfo").addEventListener("click", openSlots);
+$("bpm").addEventListener("click", () => { resetBpm(); render(); });
 
 $("lang").addEventListener("click", () => {
   lang = lang === "ko" ? "en" : "ko";

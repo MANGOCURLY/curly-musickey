@@ -20,6 +20,14 @@ async function dbPut(store, key, val) {
     tx.oncomplete = res; tx.onerror = () => rej(tx.error);
   });
 }
+async function dbDel(store, key) {
+  const d = await db();
+  return new Promise((res, rej) => {
+    const tx = d.transaction(store, "readwrite");
+    tx.objectStore(store).delete(key);
+    tx.oncomplete = res; tx.onerror = () => rej(tx.error);
+  });
+}
 async function dbGet(store, key) {
   const d = await db();
   return new Promise((res, rej) => {
@@ -36,8 +44,66 @@ function scheduleSave() {
 }
 async function saveNow() {
   clearTimeout(saveTimer);
-  const p = { ...proj, events: proj.events.map(stripRec) };
+  const p = { ...proj, events: proj.events.map(stripRec), saved: Date.now() };
   try { await dbPut("projects", slot, p); localStorage.setItem("cmk-slot", slot); } catch (e) { console.warn(e); }
+}
+
+// ================= 슬롯 목록 창 (LCD의 '슬롯' 탭 또는 Ctrl+O) =================
+// 16칸. 칸마다 킷·BPM·마디·소리 개수·저장 시각을 보여 준다
+const SLOT_COUNT = 16;
+const slotUI = { open: false, cur: 1, items: [], delArm: 0 };
+
+async function openSlots() {
+  await saveNow();
+  const items = [];
+  for (let n = 1; n <= SLOT_COUNT; n++) items.push(await dbGet("projects", n).catch(() => null));
+  Object.assign(slotUI, { open: true, cur: slot, items, delArm: 0 });
+  renderOverlay();
+}
+function closeSlots() { slotUI.open = false; renderOverlay(); }
+
+function slotKey(code, shift) {
+  const s = slotUI;
+  if (code === "Escape") return closeSlots();
+  if (code === "ArrowRight") s.cur = s.cur % SLOT_COUNT + 1;
+  else if (code === "ArrowLeft") s.cur = (s.cur + SLOT_COUNT - 2) % SLOT_COUNT + 1;
+  else if (code === "ArrowDown") s.cur = (s.cur + 3) % SLOT_COUNT + 1;
+  else if (code === "ArrowUp") s.cur = (s.cur + SLOT_COUNT - 5) % SLOT_COUNT + 1;
+  else if (code === "Enter" && shift) return copyToSlot(s.cur);
+  else if (code === "Enter") return pickSlot(s.cur);
+  else if (code === "Backspace") return deleteSlot(s.cur);
+  s.delArm = 0;
+  renderOverlay();
+}
+async function pickSlot(n) {
+  slotUI.open = false;
+  const had = await loadSlot(n);
+  renderOverlay();
+  toast((had ? t("slotLoaded") : t("slotNew"))(n));
+}
+// 다른 이름으로 저장처럼: 지금 작업을 n번에 복사하고 그 슬롯으로 옮겨 간다
+async function copyToSlot(n) {
+  if (n === slot) return pickSlot(n);
+  await dbPut("projects", n, { ...proj, events: proj.events.map(stripRec), saved: Date.now() });
+  slotUI.open = false;
+  await loadSlot(n);
+  renderOverlay();
+  toast(t("slotCopied")(n));
+}
+// 지우기는 실수 방지로 ⌫를 두 번 눌러야 한다
+async function deleteSlot(n) {
+  if (slotUI.delArm !== n) { slotUI.delArm = n; renderOverlay(); return; }
+  slotUI.delArm = 0;
+  await dbDel("projects", n);
+  slotUI.items[n - 1] = null;
+  if (n === slot) {
+    stopPlay();
+    proj = newProject();
+    undoStack.length = 0; redoStack.length = 0;
+    render(); renderGrid();
+  }
+  renderOverlay();
+  toast(t("slotDeleted")(n));
 }
 
 // first = 페이지를 처음 열 때. 이때는 아직 빈 작업이라 저장하면 슬롯을 빈 것으로 덮어쓴다
@@ -57,7 +123,7 @@ async function loadSlot(n, first = false) {
 
 // 저장 형식: 마이크 녹음은 소리 숫자(data) 그대로, 불러온 파일은 원래 파일(file, 압축된 상태)로 저장한다
 async function loadSamples() {
-  for (let i = 0; i < 3; i++) {
+  for (let i = 0; i < SAMPLES.length; i++) {
     const s = await dbGet("samples", i).catch(() => null);
     if (!s) continue;
     try {
@@ -204,6 +270,40 @@ function showRecProgress() {
   render();
 }
 
+// ---------- 보이스: 부른 음높이 찾기 + 이어 붙일 구간 ----------
+// 소리의 가운데 부분에서 '자기 자신과 가장 잘 겹치는 간격'(자기상관)을 찾으면 그게 한 주기 → 음높이
+function voiceInfo(d, rate) {
+  const len = d.length, mid = Math.floor(len * 0.45), win = Math.min(4096, Math.floor(len * 0.4));
+  const a0 = Math.max(0, mid - win / 2), minLag = Math.floor(rate / 1000), maxLag = Math.floor(rate / 70);
+  let e0 = 0;
+  for (let i = a0; i < a0 + win; i++) e0 += d[i] * d[i];
+  const r = [];
+  for (let lag = minLag; lag <= maxLag && a0 + win + lag < len; lag++) {
+    let c = 0, e1 = 0;
+    for (let i = a0; i < a0 + win; i++) { c += d[i] * d[i + lag]; e1 += d[i + lag] * d[i + lag]; }
+    r.push(c / Math.sqrt(e0 * e1 + 1e-12));
+  }
+  // 2주기·3주기 간격도 똑같이 잘 겹쳐서, 가장 큰 값을 고르면 한두 옥타브 낮게 틀린다.
+  // 그래서 '가장 큰 값의 90% 이상'인 봉우리 중 가장 짧은 간격(= 진짜 한 주기)을 고른다
+  const best = Math.max(0, ...r);
+  let bestLag = 0;
+  for (let i = 1; i < r.length - 1; i++)
+    if (r[i] >= best * 0.9 && r[i] >= r[i - 1] && r[i] >= r[i + 1]) {
+      // 봉우리 양옆 값으로 정확한 꼭짓점을 보간 (높은 음일수록 몇 센트 차이를 줄여 준다)
+      const den = r[i - 1] - 2 * r[i] + r[i + 1];
+      bestLag = i + minLag + (den ? (r[i - 1] - r[i + 1]) / (2 * den) : 0);
+      break;
+    }
+  // 겹침이 약하면(말소리·잡음) 음높이를 모르는 것 → 원래 높이를 도(60)로 본다
+  const f0 = best > 0.6 && bestLag ? 69 + 12 * Math.log2(rate / bestLag / 440) : 60;
+  // 이어 붙일 구간: 35%~75% 지점, 소리가 0을 지나 올라가는 자리에 맞춰 '틱' 소리를 줄인다
+  const zc = i => { while (i < len - 1 && !(d[i] <= 0 && d[i + 1] > 0)) i++; return i; };
+  let loopA = 0, loopB = 0;
+  if (len > rate * 0.25) { loopA = zc(Math.floor(len * 0.35)) / rate; loopB = zc(Math.floor(len * 0.75)) / rate; }
+  return { f0: Math.round(f0 * 10) / 10, loopA, loopB };
+}
+const midiName = m => I18N.en.notes[((m % 12) + 12) % 12] + (Math.floor(m / 12) - 1);
+
 function finishSample() {
   if (mic.mode !== "sample") return;
   const n = mic.slot, rate = ctx.sampleRate;
@@ -229,14 +329,16 @@ function finishSample() {
     if (i > data.length - fade) data[i] *= (data.length - i) / fade;
   }
   SAMPLES[n] = toBuffer(data, rate);
-  SAMPLE_META[n] = data.length > rate * CHOP_MIN_SEC
-    ? { kind: "chop", name: t("micName"), ...detectTempo(data, rate), match: true }
+  SAMPLE_META[n] = n === VOICE_SLOT ? { kind: "voice", ...voiceInfo(data, rate) }
+    : data.length > rate * CHOP_MIN_SEC ? { kind: "chop", name: t("micName"), ...detectTempo(data, rate), match: true }
     : { kind: "pitch" };
   dbPut("samples", n, { data, rate, meta: SAMPLE_META[n] }).catch(e => console.warn(e));
   proj.track = "u" + n;
   focus = proj.track;
   // 완료 알림: 실제로 저장된 길이(앞뒤 무음을 자른 뒤)와 어떤 모드가 됐는지
-  const msg = t("micDone")(trackShort(proj.track), (data.length / rate).toFixed(1), SAMPLE_META[n].kind === "chop");
+  const sec = (data.length / rate).toFixed(1), m = SAMPLE_META[n];
+  const msg = m.kind === "voice" ? t("voiceDone")(sec, midiName(Math.round(m.f0)))
+            : t("micDone")(trackShort(proj.track), sec, m.kind === "chop");
   // 0.1% 넘게 1.0에 닿았으면 찌그러졌을 가능성이 크다 → 경고를 붙인다
   toast(clipped > all.length * 0.001 ? msg + " · " + t("micClip") : msg, 4000);
   startSample(n, 60, ctx.currentTime);

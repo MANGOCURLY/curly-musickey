@@ -81,7 +81,7 @@ function melodyPool(base) {
 // ---------- 악기별 파트 만들기 ----------
 // 결과: [{step, midi, len}]  (트랙 id는 부르는 쪽에서 붙인다)
 const ROLE = { i0: "bass", i1: "sub", i2: "acid", i3: "reese", i4: "lead", i5: "stab", i6: "arp", i7: "chip", i8: "pad", i9: "comp" };
-const roleOf = id => ROLE[id] || (id[0] === "r" ? "lead" : isChop(+id.slice(1)) ? "chop" : "arp");
+const roleOf = id => ROLE[id] || (id[0] === "r" || id === "u" + VOICE_SLOT ? "lead" : isChop(+id.slice(1)) ? "chop" : "arp");
 
 function kickSteps(bar) {
   const ks = proj.events.filter(e => e.kind === "drum" && e.idx === 0 && Math.floor(e.step / 16) === bar).map(e => e.step % 16);

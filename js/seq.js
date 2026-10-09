@@ -3,7 +3,7 @@
 //   {kind: "drum", kit, idx, step} | {kind: "fx", bank, idx, step} | {kind: "note", track, midi, len, step}
 // evo: 진화 기록 (루프가 바뀔 때마다 찍어 둔 사진들)
 function newProject() {
-  return { v: 2, bpm: 128, bars: 1, key: 0, scale: "minor", density: 3, prog: [0, 5, 2, 6],
+  return { v: 2, bpm: 128, baseBpm: 128, bars: 1, key: 0, scale: "minor", density: 3, prog: [0, 5, 2, 6],
            kit: 0, track: "i4", octave: 0, bank: 0, events: [], randoms: {}, randomCount: 0, evo: [] };
 }
 let proj = newProject();
@@ -181,6 +181,10 @@ function startEvo() {
 }
 
 // ================= 설정 =================
+// 기준 BPM으로 되돌리기 (- = 같이 누르기 / Alt+= / BPM 숫자 탭). 기준값은 Alt+Shift+=로 지금 BPM을 저장
+function resetBpm() { stopHold(); setBpm(proj.baseBpm || 128); toast(t("bpmReset")(proj.bpm)); }
+function setBaseBpm() { proj.baseBpm = proj.bpm; scheduleSave(); toast(t("bpmBaseSet")(proj.bpm)); }
+
 function setBpm(v) {
   proj.bpm = Math.max(BPM_MIN, Math.min(BPM_MAX, v));
   if (delayNode) delayNode.delayTime.setTargetAtTime(delayTimeForBpm(), ctx.currentTime, 0.05);
