@@ -43,6 +43,7 @@ function onKeyDown(e) {
   if (e.repeat) return;   // 꾹 누를 때 생기는 반복 입력 무시 (BPM은 따로 반복)
   const code = e.code;
   pressed.add(code);
+  if (noticeMsg) { noticeMsg = null; renderOverlay(); return; }   // 안내 창은 아무 키나 누르면 닫힌다
   if (exportUI.open) { exportKey(code); return; }
   if (helpOpen) { if (code === "Escape" || code === "Backquote") toggleHelp(); return; }
 
@@ -546,6 +547,9 @@ function toast(msg, ms = 1800) {
 
 // ---------- 도움말 / 내보내기 창 ----------
 let helpOpen = false;
+// 꼭 읽어야 하는 긴 안내(마이크 문제 등)는 한 줄 알림 대신 가운데 창으로 띄운다. 아무 키나 탭하면 닫힘
+let noticeMsg = null;
+function notice(msg) { noticeMsg = msg; renderOverlay(); }
 function toggleHelp() { helpOpen = !helpOpen; renderOverlay(); }
 // 키 안내 내용: 폰에서는 Shift+` 창, 데스크톱에서는 오른쪽 패널에 항상
 function helpHTML() {
@@ -558,7 +562,10 @@ function helpHTML() {
 function renderOverlay() {
   $("side").innerHTML = helpHTML();
   const o = $("overlay");
-  if (helpOpen) {
+  if (noticeMsg) {
+    o.style.display = "flex";
+    o.innerHTML = `<div class="panel"><p class="noticeTxt">${esc(noticeMsg)}</p><p class="dim">${t("noticeClose")}</p></div>`;
+  } else if (helpOpen) {
     o.style.display = "flex";
     o.innerHTML = `<div class="panel help">${helpHTML()}<p class="dim">${t("helpClose")}</p></div>`;
   } else if (exportUI.open) {
@@ -582,7 +589,10 @@ try { evoEnabled = localStorage.getItem("cmk-evo") !== "0"; sessionWanted = loca
 $("optEvo").addEventListener("click", () => { evoEnabled = !evoEnabled; try { localStorage.setItem("cmk-evo", evoEnabled ? "1" : "0"); } catch (e) {} render(); });
 $("optKb").addEventListener("click", () => { $("optKb").blur(); toggleKb(); });
 // 도움말 창 안의 키보드 바꾸기 버튼 (창은 다시 그려지므로 overlay에서 받는다)
-$("overlay").addEventListener("click", e => { if (e.target.closest(".kbsel")) { e.target.blur(); toggleKb(); } });
+$("overlay").addEventListener("click", e => {
+  if (e.target.closest(".kbsel")) { e.target.blur(); toggleKb(); }
+  else if (noticeMsg) { noticeMsg = null; renderOverlay(); }
+});
 $("side").addEventListener("click", e => { if (e.target.closest(".kbsel")) { e.target.blur(); toggleKb(); } });
 $("optSession").addEventListener("click", () => { sessionWanted = !sessionWanted; try { localStorage.setItem("cmk-session", sessionWanted ? "1" : "0"); } catch (e) {} render(); });
 
@@ -592,13 +602,23 @@ $("start").addEventListener("click", async () => {
   }
   if (!ctx) {
     initAudio(new (window.AudioContext || window.webkitAudioContext)());
-    ctx.addEventListener("statechange", render);
+    ctx.addEventListener("statechange", () => {
+      // 전화·알람·마이크 전환 등으로 아이폰이 오디오를 멈추면, 화면에 있을 때 다시 켜 본다
+      if (ctx.state !== "running" && ctx.state !== "closed" && document.visibilityState === "visible") ctx.resume().catch(() => {});
+      render();
+    });
     if (sessionWanted) startSession();
   }
   await ctx.resume();
   $("start").blur();
   render();
   renderGrid();
+  // 들어오자마자 마이크 허락을 받아 둔다 (녹음 도중에 허락 창이 뜨지 않게). 한 번 받으면 다음부터는 묻지 않는다
+  if (micPerm === "unknown") {
+    await requestMicPermission();
+    if (micPerm === "granted") toast(t("micOk"), 2000); else notice(micProblem());
+    render();
+  }
 });
 
 // 불러오기: '불러오기' 글자(label)를 탭하면 파일 선택 창이 열리고, 고르면 여기로 온다

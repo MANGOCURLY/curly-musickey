@@ -78,42 +78,88 @@ function toBuffer(data, rate) {
 
 // ================= 마이크 =================
 // 마이크 → (같은 오디오 시계로) 소리 조각을 모은다. 내 소리 녹음과 비트박스가 같이 쓴다
-const mic = { stream: null, node: null, chunks: [], mode: null, slot: 0, timer: null };
+const mic = { stream: null, node: null, chunks: [], mode: null, slot: 0, timer: null, starting: false };
+// 마이크 허락 상태: unknown(아직) / granted / denied(거부) / nodevice(마이크 없음) / unsupported(브라우저가 지원 안 함) / error
+let micPerm = "unknown";
+
+const micSupported = () => !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+function micErrorState(e) {
+  if (e && (e.name === "NotAllowedError" || e.name === "SecurityError")) return "denied";
+  if (e && (e.name === "NotFoundError" || e.name === "OverconstrainedError")) return "nodevice";
+  return "error";
+}
+// 상태별 안내 문장 (허락 거부면 다시 허용하는 방법까지)
+const micProblem = () => t("micState")[micPerm] || t("micFail");
+
+// 시작 버튼을 탭할 때 허락을 미리 받아 둔다. 허락만 받고 마이크는 바로 끈다:
+// 아이폰은 마이크가 켜져 있는 동안 소리를 통화 모드로 바꿔 출력이 작아지거나 블루투스 음질이 떨어지기 때문
+async function requestMicPermission() {
+  if (!micSupported()) { micPerm = "unsupported"; return; }
+  try {
+    const s = await navigator.mediaDevices.getUserMedia({ audio: true });
+    s.getTracks().forEach(tr => tr.stop());
+    micPerm = "granted";
+  } catch (e) {
+    micPerm = micErrorState(e);
+  }
+  restorePlayback();
+}
+
+// 마이크를 끈 뒤 아이폰이 오디오를 멈춰 두는 경우가 있어서 다시 켠다
+function restorePlayback() {
+  if (navigator.audioSession) { try { navigator.audioSession.type = "playback"; } catch (e) {} }
+  if (ctx && ctx.state !== "running" && document.visibilityState === "visible") ctx.resume().then(render, () => {});
+}
 
 async function micStart(mode) {
-  toast(t("micAsk"));
+  if (mic.mode || mic.starting) return false;   // 빠르게 두 번 눌러 마이크가 두 번 켜지는 것 막기
+  if (!micSupported()) { micPerm = "unsupported"; notice(micProblem()); return false; }
+  mic.starting = true;
+  if (micPerm !== "granted") toast(t("micAsk"));
   try {
     if (navigator.audioSession) navigator.audioSession.type = "play-and-record";
     mic.stream = await navigator.mediaDevices.getUserMedia({
       audio: { echoCancellation: mode === "beatbox", noiseSuppression: false, autoGainControl: false },
     });
+    micPerm = "granted";
+    if (ctx.state !== "running") await ctx.resume();
+    const src = ctx.createMediaStreamSource(mic.stream);
+    const node = ctx.createScriptProcessor(2048, 1, 1);
+    mic.chunks = [];
+    node.onaudioprocess = e => {
+      // 이 조각이 실제로 들어온 시각 ≈ 지금 시각 - 조각 길이
+      mic.chunks.push({ time: ctx.currentTime - e.inputBuffer.duration, data: new Float32Array(e.inputBuffer.getChannelData(0)) });
+    };
+    const mute = gainNode(0);
+    src.connect(node); node.connect(mute); mute.connect(ctx.destination);  // 연결해 둬야 iOS에서 계속 돈다
+    mic.node = { src, node, mute };
+    // 녹음 중에 마이크가 끊기면(이어폰을 뽑는 등) 거기까지 녹음된 것을 저장한다
+    mic.stream.getAudioTracks().forEach(tr => { tr.onended = () => {
+      if (mic.mode === "sample") { finishSample(); toast(t("micLost") + " · " + $("msg").textContent, 5000); }
+      else if (mic.mode === "beatbox") { micStop(); beatbox.state = null; toast(t("micLost")); render(); }
+    }; });
   } catch (e) {
-    if (navigator.audioSession) navigator.audioSession.type = "playback";
-    toast(t("micFail"));
+    if (mic.stream) mic.stream.getTracks().forEach(tr => tr.stop());
+    mic.stream = null;
+    micPerm = e && e.name ? micErrorState(e) : "error";
+    mic.starting = false;
+    restorePlayback();
+    $("msg").classList.remove("show");   // '마이크 준비 중…' 알림은 지운다
+    notice(micProblem());
     return false;
   }
-  if (ctx.state !== "running") await ctx.resume();
-  const src = ctx.createMediaStreamSource(mic.stream);
-  const node = ctx.createScriptProcessor(2048, 1, 1);
-  mic.chunks = [];
-  node.onaudioprocess = e => {
-    // 이 조각이 실제로 들어온 시각 ≈ 지금 시각 - 조각 길이
-    mic.chunks.push({ time: ctx.currentTime - e.inputBuffer.duration, data: new Float32Array(e.inputBuffer.getChannelData(0)) });
-  };
-  const mute = gainNode(0);
-  src.connect(node); node.connect(mute); mute.connect(ctx.destination);  // 연결해 둬야 iOS에서 계속 돈다
-  mic.node = { src, node, mute };
   mic.mode = mode;
+  mic.starting = false;
   return true;
 }
 
 function micStop() {
   if (mic.node) { mic.node.src.disconnect(); mic.node.node.disconnect(); mic.node.mute.disconnect(); }
-  if (mic.stream) mic.stream.getTracks().forEach(tr => tr.stop());
+  if (mic.stream) mic.stream.getTracks().forEach(tr => { tr.onended = null; tr.stop(); });
   mic.stream = null; mic.node = null; mic.mode = null;
   clearTimeout(mic.timer);
   clearInterval(mic.ticker);
-  if (navigator.audioSession) navigator.audioSession.type = "playback";
+  restorePlayback();
 }
 
 // ---------- 내 소리 녹음 (Ctrl + I / [ / \) ----------
@@ -126,7 +172,7 @@ const recKey = { down: false, at: 0, hold: false };
 
 async function sampleKeyDown(n) {
   if (mic.mode === "sample") { finishSample(); return; }   // 톡 눌러 시작한 녹음 → 다시 누르면 완료
-  if (mic.mode) return;
+  if (mic.mode || mic.starting) return;   // 마이크를 켜는 중에 또 누른 것은 무시
   Object.assign(recKey, { down: true, at: performance.now(), hold: false });
   if (!(await micStart("sample"))) { recKey.down = false; return; }
   // 아이폰 첫 사용 때는 마이크 허락 창이 뜬다. 그사이 길게 눌렀던 키를 이미 뗐다면 녹음하지 않는다
@@ -163,15 +209,20 @@ function finishSample() {
   const n = mic.slot, rate = ctx.sampleRate;
   const all = concat(mic.chunks.map(c => c.data));
   micStop();
-  // 앞뒤 조용한 부분을 잘라 내고, 가장 큰 소리를 0.9에 맞춘다
+  // 가장 큰 소리와 찌그러진(1.0에 닿은) 부분 세기
+  let peak = 0, clipped = 0;
+  for (const x of all) { const v = Math.abs(x); if (v > peak) peak = v; if (v >= 0.99) clipped++; }
+  // 아이폰은 자동 음량 조절을 끄고 녹음해서 소리가 작게 들어올 수 있다.
+  // 그래서 '조용함' 기준을 고정값이 아니라 가장 큰 소리의 4%로 잡는다 (너무 작은 녹음도 살린다)
+  if (peak < 0.003) { toast(t("micEmpty"), 4000); render(); return; }
+  const thr = Math.max(0.002, peak * 0.04);
   let a = 0, b = all.length - 1;
-  while (a < all.length && Math.abs(all[a]) < 0.02) a++;
-  while (b > a && Math.abs(all[b]) < 0.02) b--;
-  if (b - a < rate * 0.03) { toast(t("micEmpty")); render(); return; }
-  a = Math.max(0, a - Math.floor(rate * 0.005));
+  while (a < all.length && Math.abs(all[a]) < thr) a++;
+  while (b > a && Math.abs(all[b]) < thr) b--;
+  if (b - a < rate * 0.03) { toast(t("micEmpty"), 4000); render(); return; }
+  a = Math.max(0, a - Math.floor(rate * 0.01));          // 소리 시작 직전 10ms는 남겨서 첫소리가 잘리지 않게
+  b = Math.min(all.length - 1, b + Math.floor(rate * 0.05));   // 끝 여운 50ms
   const data = all.slice(a, b + 1);
-  let peak = 0;
-  for (const x of data) peak = Math.max(peak, Math.abs(x));
   const fade = Math.min(data.length, Math.floor(rate * 0.01));
   for (let i = 0; i < data.length; i++) {
     data[i] *= 0.9 / peak;
@@ -185,7 +236,9 @@ function finishSample() {
   proj.track = "u" + n;
   focus = proj.track;
   // 완료 알림: 실제로 저장된 길이(앞뒤 무음을 자른 뒤)와 어떤 모드가 됐는지
-  toast(t("micDone")(trackShort(proj.track), (data.length / rate).toFixed(1), SAMPLE_META[n].kind === "chop"), 3500);
+  const msg = t("micDone")(trackShort(proj.track), (data.length / rate).toFixed(1), SAMPLE_META[n].kind === "chop");
+  // 0.1% 넘게 1.0에 닿았으면 찌그러졌을 가능성이 크다 → 경고를 붙인다
+  toast(clipped > all.length * 0.001 ? msg + " · " + t("micClip") : msg, 4000);
   startSample(n, 60, ctx.currentTime);
   render();
 }
