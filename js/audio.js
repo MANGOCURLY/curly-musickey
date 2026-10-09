@@ -9,6 +9,7 @@ let out = null;           // 드럼·효과음 재료가 연결될 곳 (킷마�
 function initAudio(c) {
   ctx = c;
   active = new Set();
+  chokes.clear(); trackVoices.clear();
   const comp = ctx.createDynamicsCompressor();
   comp.threshold.value = -12;
   comp.knee.value = 0;
@@ -138,6 +139,33 @@ function stopAll() {
   }
   held.clear();
   buildWet();
+}
+
+// ================= 겹치는 소리 줄이기 (빠른 BPM에서 끊김 방지) =================
+// 같은 드럼 자리를 다시 치면 앞 소리를 5ms 만에 줄여 끊는다 (실제 드럼머신의 '초크')
+const chokes = new Map();        // "킷:자리" → 그 자리의 마지막 소리들
+function hitDrum(kit, idx, t) {
+  const key = kit + ":" + idx;
+  for (const v of chokes.get(key) || []) fadeOut(v, t);
+  out = kitBuses[kit];
+  const n0 = active.size;
+  KITS[kit].hits[idx](t);
+  chokes.set(key, [...active].slice(n0));   // 방금 생긴 소리들 (Set은 넣은 순서를 지킨다)
+}
+function fadeOut(v, t) {
+  const p = v.g.gain, hold = !!p.cancelAndHoldAtTime;
+  if (hold) { p.cancelAndHoldAtTime(t); p.linearRampToValueAtTime(0, t + 0.005); }
+  v.srcs.forEach(s => { try { s.stop(t + (hold ? 0.006 : 0.002)); } catch (e) {} });
+}
+// 악기 트랙마다 동시에 울리는 음은 8개까지. 넘으면 가장 오래된 음부터 끈다
+const POLY_MAX = 8;
+const trackVoices = new Map();
+function limitVoices(id, v, t) {
+  if (!v) return;
+  const list = trackVoices.get(id) || [];
+  list.push(v);
+  while (list.length > POLY_MAX) stopVoice(list.shift(), t);
+  trackVoices.set(id, list);
 }
 
 // ================= 드럼·효과음 재료 =================

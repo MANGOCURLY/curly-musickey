@@ -118,7 +118,7 @@ function plainKey(code, shift, ready) {
 function hitPad(d, shift) {
   const now = ctx.currentTime;
   if (shift) { out = fxBus; FX_BANKS[proj.bank][d](now); record({ kind: "fx", bank: proj.bank, idx: d }); }
-  else { out = kitBuses[proj.kit]; KITS[proj.kit].hits[d](now); record({ kind: "drum", kit: proj.kit, idx: d }); focus = "drums"; }
+  else { hitDrum(proj.kit, d, now); record({ kind: "drum", kit: proj.kit, idx: d }); focus = "drums"; }
 }
 
 // 지금 악기가 조각 모드 내 소리면 그 칸 번호, 아니면 -1
@@ -134,6 +134,7 @@ function noteDown(code) {
   const v = startNote(id, midi, ctx.currentTime);
   if (v) held.set(code, v);
   focus = id;
+  lastPitch[id] = midi;   // 마우스·터치로 칸을 칠할 때 이 음을 쓴다
   const ev = record({ kind: "note", track: id, midi, len: 1 });
   if (ev) recNotes.set(code, ev);
   return midi;
@@ -264,11 +265,11 @@ function toggleCell(row, step) {
 }
 
 // ================= 격자 =================
-// 위 10줄 = 드럼 자리(Z줄 순서). 그 아래 = 음이 들어 있는 악기 트랙만 한 줄씩 (편집 중이면 지금 악기도)
+// 위 10줄 = 드럼 자리(Z줄 순서). 그 아래 = 음이 들어 있는 악기 트랙 + 지금 고른 악기
 function gridRows() {
   const rows = [...Array(10).keys()].map(i => ({ drum: i }));
   const ids = new Set(proj.events.filter(e => e.kind === "note").map(e => e.track));
-  if (edit.on) ids.add(proj.track);
+  ids.add(proj.track);   // 지금 고른 악기 줄은 비어 있어도 보여 준다 (마우스·터치로 칠할 수 있게)
   const order = id => (id[0] === "i" ? 0 : id[0] === "r" ? 100 : 200) + +id.slice(1);
   [...ids].sort((a, b) => order(a) - order(b)).forEach(id => rows.push({ track: id }));
   return rows;
@@ -276,9 +277,17 @@ function gridRows() {
 // 화면에 보이는 마디: 편집 중이면 커서가 있는 마디, 재생 중이면 재생 위치의 마디
 function gridPage() {
   if (edit.on) return Math.floor(edit.step / 16);
+  if (pinnedPage !== null && pinnedPage < loopData().bars) return pinnedPage;
   if (playStep >= 0) return Math.floor(playStep / 16);
   return 0;
 }
+// "마디 n/m" 글자를 탭하면 보는 마디를 넘기고 고정한다. 마지막 마디 다음은 다시 '재생 위치 따라가기'
+let pinnedPage = null;
+$("barInfo").addEventListener("click", () => {
+  const bars = loopData().bars;
+  pinnedPage = pinnedPage === null ? (bars > 1 ? (gridPage() + 1) % bars : null) : pinnedPage + 1 < bars ? pinnedPage + 1 : null;
+  renderGrid();
+});
 
 let gridCells = [], gridRowCount = -1;
 function renderGrid() {
@@ -290,7 +299,7 @@ function renderGrid() {
       const label = document.createElement("div");
       label.className = "rl";
       grid.appendChild(label);
-      return [label, ...ALL.map(() => { const c = document.createElement("div"); grid.appendChild(c); return c; })];
+      return [label, ...ALL.map(c => { const el = document.createElement("div"); el.dataset.c = c; grid.appendChild(el); return el; })];
     });
     gridRowCount = rows.length;
   }
@@ -326,8 +335,69 @@ function renderGrid() {
       el.className = cls;
     });
   });
-  $("barInfo").textContent = `${t("bar")} ${page + 1}/${L.bars}`;
+  gridCells.forEach((cells, r) => cells.forEach(el => { el.dataset.r = r; }));
+  $("barInfo").textContent = `${t("bar")} ${page + 1}/${L.bars}${pinnedPage !== null ? " 📌" : ""}`;
 }
+
+// ================= 마우스·터치로 격자 편집 =================
+// 칸을 누르면 넣거나 빼고, 누른 채로 끌면 지나가는 칸마다 같은 동작(넣기 또는 빼기)을 이어서 한다.
+// 한 번 끈 동작 전체가 되돌리기 한 번으로 돌아간다.
+const lastPitch = {};   // 트랙 → 마지막으로 키보드로 친 음
+const drag = { on: false, mode: null, done: new Set() };
+
+function cellFromPoint(x, y) {
+  const el = document.elementFromPoint(x, y);
+  if (!el || !el.classList.contains("c") || el.dataset.r === undefined) return null;
+  const row = gridRows()[+el.dataset.r];
+  return row ? { row, step: gridPage() * 16 + +el.dataset.c, r: +el.dataset.r } : null;
+}
+
+function paintCell(cell) {
+  const key = cell.r + ":" + cell.step;
+  if (drag.done.has(key)) return;
+  drag.done.add(key);
+  const { row, step } = cell, has = proj.events.some(ev => inCell(ev, row, step));
+  edit.row = cell.r; edit.step = step;          // 키보드 편집 커서도 같은 칸으로
+  if (drag.mode === "erase") {
+    if (has) proj.events = proj.events.filter(ev => !inCell(ev, row, step));
+    return;
+  }
+  if (has) return;
+  const ready = ctx && ctx.state === "running", now = ready ? ctx.currentTime : 0;
+  if (row.drum !== undefined) {
+    proj.events.push({ kind: "drum", kit: proj.kit, idx: row.drum, step });
+    if (ready) hitDrum(proj.kit, row.drum, now);
+  } else {
+    const id = row.track, chop = id[0] === "u" && isChop(+id.slice(1));
+    const midi = chop ? 60 + Math.floor(step / 4) % CHOP_SLICES
+               : lastPitch[id] !== undefined ? lastPitch[id] : at(trackBase(id), chordAt(step).root % 12);
+    proj.events.push({ kind: "note", track: id, midi, len: chop ? 4 : 1, step });
+    if (ready) stopVoice(startNote(id, midi, now), now + stepDur());
+  }
+}
+
+$("grid").addEventListener("pointerdown", e => {
+  if (evoPlay) return;   // 진화 재생 중에는 지난 사진을 보여 주는 중이라 고치지 않는다
+  const cell = cellFromPoint(e.clientX, e.clientY);
+  if (!cell) return;
+  e.preventDefault();
+  undoStack.push(snap());
+  if (undoStack.length > UNDO_MAX) undoStack.shift();
+  redoStack.length = 0;
+  drag.on = true;
+  drag.done.clear();
+  drag.mode = proj.events.some(ev => inCell(ev, cell.row, cell.step)) ? "erase" : "add";
+  paintCell(cell);
+  renderGrid();
+});
+window.addEventListener("pointermove", e => {
+  if (!drag.on) return;
+  const cell = cellFromPoint(e.clientX, e.clientY);
+  if (cell) { paintCell(cell); renderGrid(); }
+});
+const endDrag = () => { if (drag.on) { drag.on = false; changed(); } };
+window.addEventListener("pointerup", endDrag);
+window.addEventListener("pointercancel", endDrag);
 
 // 화면의 재생 위치: 예약해 둔 스텝이 실제로 들릴 때 옮긴다
 function tickPlayhead() {
@@ -473,15 +543,20 @@ function toast(msg, ms = 1800) {
 // ---------- 도움말 / 내보내기 창 ----------
 let helpOpen = false;
 function toggleHelp() { helpOpen = !helpOpen; renderOverlay(); }
+// 키 안내 내용: 폰에서는 Shift+` 창, 데스크톱에서는 오른쪽 패널에 항상
+function helpHTML() {
+  return `<h2>${t("helpTitle")}</h2>` +
+    `<button class="kbsel">⌨ ${t(kbProfile === "mac" ? "kbMac" : "kbK380")} ⇄</button>` +
+    (kbProfile === "mac" ? `<p class="note">${t("macNote")}</p>` : "") + `<div class="hl">` +
+    t("help").map(([k, v]) => (v ? `<div><kbd>${esc(k)}</kbd><span>${esc(v)}</span></div>` : `<h3>${esc(k)}</h3>`)).join("") +
+    `</div>`;
+}
 function renderOverlay() {
+  $("side").innerHTML = helpHTML();
   const o = $("overlay");
   if (helpOpen) {
     o.style.display = "flex";
-    o.innerHTML = `<div class="panel help"><h2>${t("helpTitle")}</h2>` +
-      `<button class="kbsel">⌨ ${t(kbProfile === "mac" ? "kbMac" : "kbK380")} ⇄</button>` +
-      (kbProfile === "mac" ? `<p class="note">${t("macNote")}</p>` : "") + `<div class="hl">` +
-      t("help").map(([k, v]) => (v ? `<div><kbd>${esc(k)}</kbd><span>${esc(v)}</span></div>` : `<h3>${esc(k)}</h3>`)).join("") +
-      `</div><p class="dim">${t("helpClose")}</p></div>`;
+    o.innerHTML = `<div class="panel help">${helpHTML()}<p class="dim">${t("helpClose")}</p></div>`;
   } else if (exportUI.open) {
     o.style.display = "flex";
     const whats = [t("exLoop"), t("exEvo"), t("exSession")];
@@ -504,6 +579,7 @@ $("optEvo").addEventListener("click", () => { evoEnabled = !evoEnabled; try { lo
 $("optKb").addEventListener("click", () => { $("optKb").blur(); toggleKb(); });
 // 도움말 창 안의 키보드 바꾸기 버튼 (창은 다시 그려지므로 overlay에서 받는다)
 $("overlay").addEventListener("click", e => { if (e.target.closest(".kbsel")) { e.target.blur(); toggleKb(); } });
+$("side").addEventListener("click", e => { if (e.target.closest(".kbsel")) { e.target.blur(); toggleKb(); } });
 $("optSession").addEventListener("click", () => { sessionWanted = !sessionWanted; try { localStorage.setItem("cmk-session", sessionWanted ? "1" : "0"); } catch (e) {} render(); });
 
 $("start").addEventListener("click", async () => {
@@ -597,9 +673,12 @@ function frame(now) {
 }
 
 // ================= 처음 열 때 =================
+// 창 크기가 바뀌면(폰 ↔ 데스크톱 배치) 시각화 캔버스 크기를 다시 맞춘다
+window.addEventListener("resize", () => { sizeCanvas(miniCanvas); if (vizOn) sizeCanvas(bigCanvas); });
+
 (async () => {
   sizeCanvas(miniCanvas);
-  render(); renderGrid();
+  render(); renderGrid(); renderOverlay();
   let n = 1;
   try { n = +localStorage.getItem("cmk-slot") || 1; } catch (e) {}
   await loadSamples().catch(e => console.warn(e));

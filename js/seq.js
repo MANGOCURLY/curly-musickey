@@ -10,7 +10,7 @@ let proj = newProject();
 let slot = 1;                 // 지금 슬롯 (1~8)
 
 const STEPS_PER_BAR = 16;
-const BPM_MIN = 40, BPM_MAX = 300;
+const BPM_MIN = 40, BPM_MAX = 999;
 const totalSteps = (p = proj) => p.bars * STEPS_PER_BAR;
 const stepDur = (bpm = proj.bpm) => 60 / bpm / 4;
 // 귀에 들리는 소리는 출력 지연만큼 늦다. 녹음할 때 이만큼 빼서 기록한다
@@ -124,9 +124,13 @@ function playStepAt(L, step, t) {
 }
 
 function playEvent(ev, t, bpm = proj.bpm) {
-  if (ev.kind === "drum") { out = kitBuses[ev.kit]; KITS[ev.kit].hits[ev.idx](t); }
+  if (ev.kind === "drum") hitDrum(ev.kit, ev.idx, t);
   else if (ev.kind === "fx") { out = fxBus; FX_BANKS[ev.bank][ev.idx](t); }
-  else stopVoice(startNote(ev.track, ev.midi, t), t + ev.len * stepDur(bpm));
+  else {
+    const v = startNote(ev.track, ev.midi, t);
+    stopVoice(v, t + ev.len * stepDur(bpm));
+    limitVoices(ev.track, v, t);
+  }
 }
 
 // 메트로놈: 한 박마다 '틱', 마디 첫 박은 높게
