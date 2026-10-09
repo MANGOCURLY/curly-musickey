@@ -81,7 +81,7 @@ function melodyPool(base) {
 // ---------- 악기별 파트 만들기 ----------
 // 결과: [{step, midi, len}]  (트랙 id는 부르는 쪽에서 붙인다)
 const ROLE = { i0: "bass", i1: "sub", i2: "acid", i3: "reese", i4: "lead", i5: "stab", i6: "arp", i7: "chip", i8: "pad", i9: "comp" };
-const roleOf = id => ROLE[id] || (id[0] === "r" ? "lead" : "arp");
+const roleOf = id => ROLE[id] || (id[0] === "r" ? "lead" : isChop(+id.slice(1)) ? "chop" : "arp");
 
 function kickSteps(bar) {
   const ks = proj.events.filter(e => e.kind === "drum" && e.idx === 0 && Math.floor(e.step / 16) === bar).map(e => e.step % 16);
@@ -198,6 +198,16 @@ const GEN = {
     for (let step = 0; step < totalSteps(); step += L) {
       const ch = chordAt(step), notes = [...ch.tones, ...(rand() < 0.4 ? [ch.seventh] : [])];
       for (const x of notes) out.push({ step, midi: at(base, x % 12), len: L });
+    }
+    return out;
+  },
+  // 조각 모드(불러온 노래): 원곡 순서대로의 조각을 기본으로, 가끔 다른 조각으로 바꿔 친다 (MPC식 재배치)
+  chop(base) {
+    const out = [];
+    for (let step = 0; step < totalSteps(); step++) {
+      if (!chance(step % 4 === 0 ? 0.7 : step % 2 === 0 ? 0.35 : 0.12)) continue;
+      const slice = rand() < 0.5 ? Math.floor(step / 4) % CHOP_SLICES : Math.floor(rand() * CHOP_SLICES);
+      out.push({ step, midi: base + slice, len: pick([1, 2, 2, 4]) });
     }
     return out;
   },

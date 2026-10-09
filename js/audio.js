@@ -582,21 +582,42 @@ function stopVoice(v, t) {
   v.srcs.forEach(s => { try { s.stop(t + v.release * 1.5); } catch (e) {} });
 }
 
-// ================= 내 소리 (마이크로 녹음한 샘플 3칸: I [ \ 키) =================
-// A키(옥타브 0)가 녹음한 원래 높이. 다른 건반은 재생 속도를 바꿔 음높이를 바꾼다
+// ================= 내 소리 3칸 (I [ \ 키): 마이크 녹음 또는 불러온 파일 =================
+// kind "pitch" = 짧은 소리. A키(옥타브 0)가 원래 높이, 다른 건반은 재생 속도로 음높이를 바꾼다
+// kind "chop"  = 긴 소리·노래. 구간(16박) 안을 1박씩 16조각으로 잘라 A~P 키에 둔다
+//   midi 60~75 = 조각 1~16, 76 = 구간 전체
 const SAMPLES = [null, null, null];
+const SAMPLE_META = [null, null, null];   // {kind, name, bpm(원곡), start(구간 시작 초), match(속도 맞추기)}
+const CHOP_SLICES = 16, CHOP_WHOLE = 76;
+const isChop = slot => !!SAMPLES[slot] && (SAMPLE_META[slot] || {}).kind === "chop";
+// 속도 맞추기: 원곡 BPM → 지금 BPM 비율로 재생 속도를 바꾼다 (음높이도 같이 바뀐다)
+const chopRate = m => (m.match && m.bpm ? proj.bpm / m.bpm : 1);
+
 function startSample(slot, midi, t) {
   const buf = SAMPLES[slot];
   if (!buf) return null;
+  const m = SAMPLE_META[slot] || { kind: "pitch" };
   const s = ctx.createBufferSource(), g = ctx.createGain();
   s.buffer = buf;
-  s.playbackRate.value = Math.pow(2, (midi - 60) / 12);
   g.gain.setValueAtTime(0, t);
   g.gain.linearRampToValueAtTime(0.9, t + 0.003);
+  if (m.kind === "chop") {
+    const beat = 60 / m.bpm, idx = midi - 60;
+    const offset = m.start + (idx >= CHOP_SLICES ? 0 : idx * beat);
+    if (offset >= buf.duration) return null;
+    const dur = Math.min(idx >= CHOP_SLICES ? beat * CHOP_SLICES : beat, buf.duration - offset);
+    const rate = chopRate(m), end = t + dur / rate;
+    s.playbackRate.value = rate;
+    s.start(t, offset, dur);
+    g.gain.setValueAtTime(0.9, Math.max(t + 0.004, end - 0.006));  // 조각 끝에서 '틱' 소리가 나지 않게 살짝 줄인다
+    g.gain.linearRampToValueAtTime(0, end);
+  } else {
+    s.playbackRate.value = Math.pow(2, (midi - 60) / 12);
+    s.start(t);
+  }
   s.connect(g);
   g.connect(master);
   g.connect(gainNode(0.15)).connect(verbIn);
-  s.start(t);
   const v = track(g, [s]);
   Object.assign(v, { start: t, attack: 0.003, release: 0.08 });
   return v;
@@ -618,7 +639,8 @@ function startNote(id, midi, t) {
 function trackName(id) {
   if (id[0] === "i") return t("insts")[+id.slice(1)];
   if (id[0] === "r") return t("randomTone") + " " + id.slice(1);
-  return t("user") + " " + (+id.slice(1) + 1);
+  const m = SAMPLE_META[+id.slice(1)];
+  return m && m.name ? m.name : t("user") + " " + (+id.slice(1) + 1);   // 불러온 노래는 파일 이름
 }
 function trackShort(id) {
   if (id[0] === "i") return t("instShort")[+id.slice(1)];

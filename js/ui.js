@@ -18,9 +18,27 @@ let vizOn = false;
 const $ = id => document.getElementById(id);
 const shiftHeld = () => pressed.has("ShiftLeft") || pressed.has("ShiftRight");
 
+// ================= 키보드 종류 =================
+// "k380" = 아이폰 + K380 (Ctrl 조합) / "mac" = 맥북 (⌘도 Ctrl처럼 받는다)
+// 처음에는 기기를 보고 정한다: 터치가 없는 Mac이면 맥북
+let kbProfile = /Mac/.test(navigator.platform) && navigator.maxTouchPoints < 2 ? "mac" : "k380";
+try { kbProfile = localStorage.getItem("cmk-kb") || kbProfile; } catch (e) {}
+function toggleKb() {
+  kbProfile = kbProfile === "mac" ? "k380" : "mac";
+  try { localStorage.setItem("cmk-kb", kbProfile); } catch (e) {}
+  render(); renderOverlay();
+}
+// 맥에서 ⌘를 Ctrl처럼 받을 키. ⌘+숫자(탭 이동)·⌘+화살표(뒤로 가기)·⌘+M(최소화)처럼
+// 브라우저나 macOS가 먼저 쓰는 조합은 넣지 않는다
+const CMD_AS_CTRL = new Set(["KeyZ", "KeyS", "KeyE", "KeyP", "KeyB"]);
+
 // ================= 키 입력 =================
 function onKeyDown(e) {
-  if (e.metaKey) return;  // Cmd 조합은 iOS 몫으로 남겨 둔다
+  let ctrl = e.ctrlKey;
+  if (e.metaKey) {
+    if (kbProfile === "mac" && CMD_AS_CTRL.has(e.code)) ctrl = true;
+    else return;          // 그 밖의 ⌘ 조합은 iOS·macOS 몫으로 남겨 둔다
+  }
   e.preventDefault();     // 스크롤, 포커스 이동 등 기본 동작 막기
   if (e.repeat) return;   // 꾹 누를 때 생기는 반복 입력 무시 (BPM은 따로 반복)
   const code = e.code;
@@ -29,19 +47,24 @@ function onKeyDown(e) {
   if (helpOpen) { if (code === "Escape" || code === "Backquote") toggleHelp(); return; }
 
   const ready = ctx && ctx.state === "running";
-  if (e.ctrlKey) ctrlKey(code, e.shiftKey, ready);
+  if (ctrl) ctrlKey(code, e.shiftKey, ready);
   else if (e.altKey) altKey(code);
   else if (!(edit.on && editKey(code, e.shiftKey, ready))) plainKey(code, e.shiftKey, ready);
   render();
 }
 
 function ctrlKey(code, shift, ready) {
-  const n = +code.replace("Digit", "");
-  if (code === "KeyZ") shift ? redo() : undo();
+  const n = +code.replace("Digit", ""), cs = chopSlot();
+  // control+화살표는 macOS가 가로채서(Mission Control), 어디서나 되는 대체 키를 같이 둔다:
+  //   Ctrl+9 / Ctrl+0 = 루프 길이,  Ctrl+, / Ctrl+. = 원곡 BPM ÷2 / ×2
+  if (cs >= 0 && (code === "ArrowUp" || code === "Period")) scaleSongBpm(cs, 2);
+  else if (cs >= 0 && (code === "ArrowDown" || code === "Comma")) scaleSongBpm(cs, 0.5);
+  else if (cs >= 0 && code === "KeyM") toggleMatch(cs);
+  else if (code === "KeyZ") shift ? redo() : undo();
   else if (code === "KeyS") { saveNow(); toast(t("saved")); }
   else if (/^Digit[1-8]$/.test(code)) loadSlot(n).then(had => toast((had ? t("slotLoaded") : t("slotNew"))(n)));
-  else if (code === "ArrowLeft") setBars(-1);
-  else if (code === "ArrowRight") setBars(1);
+  else if (code === "ArrowLeft" || code === "Digit9") setBars(-1);
+  else if (code === "ArrowRight" || code === "Digit0") setBars(1);
   else if (code === "Minus") holdBpm(code, -20);
   else if (code === "Equal") holdBpm(code, 20);
   else if (code === "Backspace") clearFocus();
@@ -69,6 +92,9 @@ function plainKey(code, shift, ready) {
     else proj.kit = (proj.kit + dir + KITS.length) % KITS.length;
     scheduleSave();
   }
+  // 조각 모드에서는 ↑↓가 옥타브 대신 구간 이동 (Shift = 1박, 아니면 1마디)
+  else if ((code === "ArrowUp" || code === "ArrowDown") && chopSlot() >= 0)
+    moveRegion(chopSlot(), (code === "ArrowUp" ? 1 : -1) * (shift ? 1 : 4));
   else if (code === "ArrowUp") { proj.octave = Math.min(OCT_MAX, proj.octave + 1); scheduleSave(); }
   else if (code === "ArrowDown") { proj.octave = Math.max(OCT_MIN, proj.octave - 1); scheduleSave(); }
   else if (code === "Backquote") shift ? toggleHelp() : toggleViz();
@@ -85,7 +111,7 @@ function plainKey(code, shift, ready) {
   else if (code === "KeyR") shift ? randomAll() : randomDrums();
   else if (code === "Space") playing ? stopPlay() : startPlay();
   else if (code === "Enter") { if (evoPlay) stopPlay(); if (!playing) { startPlay(); recording = true; } else recording = !recording; }
-  else if (code === "Escape") { stopAll(); stopPlay(); if (mic.mode) micStop(); }
+  else if (code === "Escape") { stopAll(); stopPlay(); preview.v = null; if (mic.mode) micStop(); }
 }
 
 // 드럼 또는 (Shift) 효과음을 치고, 녹음 중이면 기록
@@ -95,8 +121,16 @@ function hitPad(d, shift) {
   else { out = kitBuses[proj.kit]; KITS[proj.kit].hits[d](now); record({ kind: "drum", kit: proj.kit, idx: d }); focus = "drums"; }
 }
 
+// 지금 악기가 조각 모드 내 소리면 그 칸 번호, 아니면 -1
+const chopSlot = () => (proj.track[0] === "u" && isChop(+proj.track.slice(1)) ? +proj.track.slice(1) : -1);
+
+// 건반 키. 조각 모드에서는 A~P = 조각 1~16, ; = 구간 전체, ' = 구간 루프, ] = 원곡 미리 듣기
+// 돌려주는 값: 기록할 midi (기록할 것이 없으면 null)
 function noteDown(code) {
-  const id = proj.track, midi = trackBase(id) + proj.octave * 12 + NOTE_KEYS[code];
+  const id = proj.track, cs = chopSlot();
+  if (cs >= 0 && code === "Quote") { toggleRegionLoop(cs); return null; }
+  if (cs >= 0 && code === "BracketRight") { togglePreview(cs); return null; }
+  const midi = cs >= 0 ? 60 + NOTE_KEYS[code] : trackBase(id) + proj.octave * 12 + NOTE_KEYS[code];
   const v = startNote(id, midi, ctx.currentTime);
   if (v) held.set(code, v);
   focus = id;
@@ -111,10 +145,18 @@ function userPad(n) {
   focus = proj.track;
   if (!SAMPLES[n]) { toast(t("userEmpty")(trackShort(proj.track))); return; }
   startSample(n, 60, ctx.currentTime);
-  record({ kind: "note", track: proj.track, midi: 60, len: Math.max(1, Math.round(SAMPLES[n].duration / stepDur())) });
+  // 녹음할 때 길이: 조각 모드는 1박(4칸), 짧은 소리는 소리 길이만큼 (루프 길이를 넘지 않게)
+  const len = isChop(n) ? 4 : Math.round(SAMPLES[n].duration / stepDur());
+  record({ kind: "note", track: proj.track, midi: 60, len: Math.max(1, Math.min(totalSteps(), len)) });
 }
 
 function onKeyUp(e) {
+  // 맥은 ⌘를 누르고 있는 동안 다른 키를 떼도 keyup을 보내지 않는다 → ⌘를 뗄 때 눌림 표시를 정리
+  if (e.code === "MetaLeft" || e.code === "MetaRight") {
+    for (const c of [...pressed]) if (!held.has(c) && !/Shift|Alt|Control/.test(c)) pressed.delete(c);
+    render();
+    return;
+  }
   if (e.metaKey) return;
   e.preventDefault();
   pressed.delete(e.code);
@@ -191,9 +233,10 @@ function editKey(code, shift, ready) {
   }
   else if (code in NOTE_KEYS) {
     const midi = noteDown(code), id = proj.track;
+    if (midi === null) return true;   // 조각 모드의 루프·미리 듣기 키는 칸에 찍지 않는다
     change(() => {
       proj.events = proj.events.filter(ev => !(ev.track === id && ev.step === edit.step));
-      proj.events.push({ kind: "note", track: id, midi, len: 1, step: edit.step });
+      proj.events.push({ kind: "note", track: id, midi, len: chopSlot() >= 0 ? 4 : 1, step: edit.step });
     });
     edit.row = gridRows().findIndex(x => x.track === id);
     edit.step = (edit.step + 1) % n;
@@ -211,6 +254,9 @@ function toggleCell(row, step) {
     change(() => { proj.events = proj.events.filter(ev => !inCell(ev, row, step)); });
   } else if (row.drum !== undefined) {
     change(() => proj.events.push({ kind: "drum", kit: proj.kit, idx: row.drum, step }));
+  } else if (row.track[0] === "u" && isChop(+row.track.slice(1))) {
+    // 조각 모드: 그 박에 해당하는 원곡 조각을 1박 길이로
+    change(() => proj.events.push({ kind: "note", track: row.track, midi: 60 + Math.floor(step / 4) % CHOP_SLICES, len: 4, step }));
   } else {
     const midi = at(trackBase(row.track), chordAt(step).root % 12);
     change(() => proj.events.push({ kind: "note", track: row.track, midi, len: 1, step }));
@@ -325,6 +371,13 @@ function keyLook(code, sh) {
   const d = DRUM_KEYS.indexOf(code), inst = INST_KEYS.indexOf(code), user = USER_KEYS.indexOf(code);
   if (sh) return d >= 0 ? [t("fx")[proj.bank][d], "fx"] : ["", ""];   // Shift: 효과음만 보여 준다
   if (d >= 0) return [(t("kitDrums")[proj.kit] || {})[d] || t("drums")[d], "drum"];
+  if (code in NOTE_KEYS && chopSlot() >= 0) {
+    const i = NOTE_KEYS[code], cs = chopSlot();
+    if (i < CHOP_SLICES) return [String(i + 1), "chop"];
+    if (code === "Semicolon") return [t("chopWhole"), "chop all"];
+    if (code === "Quote") return [t("chopLoop"), "func" + (proj.events.some(e => e.track === "u" + cs && e.midi === CHOP_WHOLE) ? " sel" : "")];
+    return [t("chopListen"), "func" + (preview.v ? " sel" : "")];
+  }
   if (code in NOTE_KEYS) {
     const n = NOTE_KEYS[code] % 12, name = t("notes")[n];
     return [name, name.includes("#") ? "black" : "white"];
@@ -361,18 +414,27 @@ function render() {
   const note = "C" + (Math.floor((trackBase(id) + proj.octave * 12) / 12) - 1);
   $("kit").textContent = `${t("kits")[proj.kit]} ${proj.kit + 1}/${KITS.length}`;
   $("oct").textContent = `${sign}${proj.octave} · ${note}`;
-  $("keyInfo").textContent = `${keyText()} · ${t("density")}${proj.density}`;
+  const cs = chopSlot();
+  if (cs >= 0) {
+    // 조각 모드: 원곡 BPM · 구간이 몇 마디째인지 · 속도 맞추기
+    const m = SAMPLE_META[cs];
+    $("oct").textContent = `${t("bar")} ${Math.floor(m.start / (240 / m.bpm)) + 1}`;
+    $("keyInfo").textContent = `${t("song")} ${m.bpm} · ${m.match ? t("matchOn") : t("matchOff")}`;
+  } else {
+    $("keyInfo").textContent = `${keyText()} · ${t("density")}${proj.density}`;
+  }
   $("vKit").textContent = t("kits")[proj.kit];
   $("vOct").textContent = `${sign}${proj.octave} · ${note}`;
   $("slotInfo").textContent = `${t("slot")} ${slot}`;
   $("vClose").textContent = t("vizClose");
+  $("load").textContent = t("load");
   $("lang").textContent = lang === "ko" ? "EN" : "한";
   $("kbLabelK").textContent = t("kit");
-  $("kbLabelO").textContent = t("octave");
+  $("kbLabelO").textContent = chopSlot() >= 0 ? t("region") : t("octave");
 
   const on = !!ctx && ctx.state === "running";
   $("dot").classList.toggle("on", on);
-  $("stateTxt").textContent = `${t("audio")} ${on ? t("on") : t("off")}`;
+  $("stateTxt").textContent = on ? t("on") : t("off");   // 자리가 좁아서 점 + 켜짐/꺼짐만
   $("startWrap").style.display = on ? "none" : "flex";
   $("seq").style.display = on ? "flex" : "none";
   $("startMain").textContent = t("start");
@@ -381,8 +443,8 @@ function render() {
   $("optSession").className = "opt" + (sessionWanted ? " on" : "");
   $("optEvo").innerHTML = `<b>${t("optEvo")} · ${evoEnabled ? t("on") : t("off")}</b><span>${t("optEvoSub")}</span>`;
   $("optSession").innerHTML = `<b>${t("optSession")} · ${sessionWanted ? t("on") : t("off")}</b><span>${t("optSessionSub")}</span>`;
-  $("optSession").style.display = ctx ? "none" : "";
-  $("optEvo").style.display = ctx ? "none" : "";
+  $("optKb").innerHTML = `<b>${t("optKb")} · ${t(kbProfile === "mac" ? "kbMac" : "kbK380")}</b><span>${t(kbProfile === "mac" ? "kbMacSub" : "kbK380Sub")}</span>`;
+  for (const id of ["optSession", "optEvo", "optKb"]) $(id).style.display = ctx ? "none" : "";
 
   $("bpm").textContent = proj.bpm;
   $("chipPlay").textContent = playing ? t("play") : t("stop");
@@ -415,7 +477,9 @@ function renderOverlay() {
   const o = $("overlay");
   if (helpOpen) {
     o.style.display = "flex";
-    o.innerHTML = `<div class="panel help"><h2>${t("helpTitle")}</h2><div class="hl">` +
+    o.innerHTML = `<div class="panel help"><h2>${t("helpTitle")}</h2>` +
+      `<button class="kbsel">⌨ ${t(kbProfile === "mac" ? "kbMac" : "kbK380")} ⇄</button>` +
+      (kbProfile === "mac" ? `<p class="note">${t("macNote")}</p>` : "") + `<div class="hl">` +
       t("help").map(([k, v]) => (v ? `<div><kbd>${esc(k)}</kbd><span>${esc(v)}</span></div>` : `<h3>${esc(k)}</h3>`)).join("") +
       `</div><p class="dim">${t("helpClose")}</p></div>`;
   } else if (exportUI.open) {
@@ -437,6 +501,9 @@ const esc = s => String(s).replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", 
 let sessionWanted = false;
 try { evoEnabled = localStorage.getItem("cmk-evo") !== "0"; sessionWanted = localStorage.getItem("cmk-session") === "1"; } catch (e) {}
 $("optEvo").addEventListener("click", () => { evoEnabled = !evoEnabled; try { localStorage.setItem("cmk-evo", evoEnabled ? "1" : "0"); } catch (e) {} render(); });
+$("optKb").addEventListener("click", () => { $("optKb").blur(); toggleKb(); });
+// 도움말 창 안의 키보드 바꾸기 버튼 (창은 다시 그려지므로 overlay에서 받는다)
+$("overlay").addEventListener("click", e => { if (e.target.closest(".kbsel")) { e.target.blur(); toggleKb(); } });
 $("optSession").addEventListener("click", () => { sessionWanted = !sessionWanted; try { localStorage.setItem("cmk-session", sessionWanted ? "1" : "0"); } catch (e) {} render(); });
 
 $("start").addEventListener("click", async () => {
@@ -452,6 +519,14 @@ $("start").addEventListener("click", async () => {
   $("start").blur();
   render();
   renderGrid();
+});
+
+// 불러오기: '불러오기' 글자(label)를 탭하면 파일 선택 창이 열리고, 고르면 여기로 온다
+$("file").addEventListener("change", async () => {
+  const f = $("file").files[0];
+  $("file").value = "";   // 같은 파일을 다시 골라도 change가 오게
+  $("file").blur();       // 포커스가 남으면 Space·Enter가 파일 창을 다시 연다
+  await importFile(f);    // 소리를 켜기 전이어도 불러오기는 된다
 });
 
 $("lang").addEventListener("click", () => {

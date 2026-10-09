@@ -55,11 +55,19 @@ async function loadSlot(n, first = false) {
   return !!p;
 }
 
+// 저장 형식: 마이크 녹음은 소리 숫자(data) 그대로, 불러온 파일은 원래 파일(file, 압축된 상태)로 저장한다
 async function loadSamples() {
   for (let i = 0; i < 3; i++) {
     const s = await dbGet("samples", i).catch(() => null);
-    if (s) SAMPLES[i] = toBuffer(s.data, s.rate);
+    if (!s) continue;
+    try {
+      SAMPLES[i] = s.file ? await decodeFile(s.file) : toBuffer(s.data, s.rate);
+      SAMPLE_META[i] = s.meta || { kind: "pitch" };
+    } catch (e) { console.warn(e); }
   }
+}
+function saveSampleMeta(n) {
+  dbGet("samples", n).then(s => { if (s) { s.meta = SAMPLE_META[n]; return dbPut("samples", n, s); } }).catch(e => console.warn(e));
 }
 // AudioBuffer는 어느 오디오 컨텍스트에서도 쓸 수 있어서, 시작 전에도 OfflineAudioContext로 만들어 둔다
 function toBuffer(data, rate) {
@@ -108,7 +116,8 @@ function micStop() {
 }
 
 // ---------- 내 소리 녹음 (Ctrl + I / [ / \) ----------
-const SAMPLE_MAX_SEC = 6;
+const SAMPLE_MAX_SEC = 30;
+const CHOP_MIN_SEC = 4;      // 이보다 길면 조각 모드
 async function toggleSampleRec(n) {
   if (mic.mode === "sample") { finishSample(); return; }
   if (mic.mode) return;
@@ -138,13 +147,201 @@ function finishSample() {
     if (i > data.length - fade) data[i] *= (data.length - i) / fade;
   }
   SAMPLES[n] = toBuffer(data, rate);
-  dbPut("samples", n, { data, rate }).catch(e => console.warn(e));
+  SAMPLE_META[n] = data.length > rate * CHOP_MIN_SEC
+    ? { kind: "chop", name: t("micName"), ...detectTempo(data, rate), match: true }
+    : { kind: "pitch" };
+  dbPut("samples", n, { data, rate, meta: SAMPLE_META[n] }).catch(e => console.warn(e));
   proj.track = "u" + n;
   focus = proj.track;
   toast(t("micDone")(trackShort(proj.track)));
-  const now = ctx.currentTime;
-  startSample(n, 60, now);
+  startSample(n, 60, ctx.currentTime);
   render();
+}
+
+// ---------- 음악 파일 불러오기 (LCD의 불러오기 버튼) ----------
+// 지금 고른 내 소리 칸에 넣는다. 내 소리를 고르고 있지 않으면 빈 칸, 다 차 있으면 1번 칸
+const FILE_MAX_MB = 60, FILE_MAX_SEC = 360;
+async function importFile(file) {
+  if (!file) return;
+  if (file.size > FILE_MAX_MB * 1024 * 1024) { toast(t("fileTooBig")(FILE_MAX_MB)); return; }
+  const n = proj.track[0] === "u" ? +proj.track.slice(1) : Math.max(0, SAMPLES.findIndex(s => !s));
+  toast(t("fileLoading"), 60000);
+  try {
+    const ab = await file.arrayBuffer();
+    const buf = await decodeFile(ab);
+    const tempo = detectTempo(buf.getChannelData(0), buf.sampleRate);
+    SAMPLES[n] = buf;
+    SAMPLE_META[n] = { kind: "chop", name: file.name.replace(/\.[^.]+$/, ""), ...tempo, match: true };
+    await dbPut("samples", n, { file: ab, meta: SAMPLE_META[n] });
+    proj.track = "u" + n;
+    focus = proj.track;
+    scheduleSave();
+    toast(t("fileDone")(trackShort(proj.track), tempo.bpm), 4000);
+  } catch (e) {
+    console.warn(e);
+    toast(t("fileFail"), 4000);
+  }
+  render();
+}
+
+// 파일 → 소리 데이터. 메모리를 아끼려고 한 채널(모노)로 합치고 최대 6분까지만 쓴다
+async function decodeFile(ab) {
+  const rate = ctx ? ctx.sampleRate : 48000;
+  const dec = await new OfflineAudioContext(1, 1, rate).decodeAudioData(ab.slice(0));
+  const len = Math.min(dec.length, Math.floor(dec.sampleRate * FILE_MAX_SEC));
+  const mono = new Float32Array(len);
+  for (let c = 0; c < dec.numberOfChannels; c++) {
+    const d = dec.getChannelData(c);
+    for (let i = 0; i < len; i++) mono[i] += d[i] / dec.numberOfChannels;
+  }
+  return toBuffer(mono, dec.sampleRate);
+}
+
+// ---------- BPM 감지 ----------
+// 소리가 '확 커지는' 순간들의 간격이 가장 잘 맞는 템포를 찾는다 (앞 60초만 본다)
+// 결과: {bpm, start(첫 박 위치, 초)}
+function detectTempo(data, rate) {
+  const hop = 512, n = Math.min(data.length, rate * 60), env = [];
+  let prev = 0;
+  for (let i = 0; i + hop <= n; i += hop) {
+    let s = 0;
+    for (let j = i; j < i + hop; j++) s += data[j] * data[j];
+    const e = Math.sqrt(s / hop);
+    env.push(Math.max(0, e - prev));
+    prev = e;
+  }
+  const fps = rate / hop;
+  const at = x => { const i = Math.floor(x), f = x - i; return (env[i] || 0) * (1 - f) + (env[i + 1] || 0) * f; };
+  const score = bpm => {
+    const lag = 60 * fps / bpm;
+    let s = 0;
+    for (let i = 0; i + 2 * lag < env.length; i++) s += env[i] * (at(i + lag) + 0.5 * at(i + 2 * lag));
+    return s / (env.length - 2 * lag);
+  };
+  // 먼저 0.5 간격으로 넓게, 그다음 찾은 근처를 0.05 간격으로 좁게 (조금만 틀려도 뒤 조각이 밀리기 때문)
+  let best = 120, bestScore = -1;
+  for (let bpm = 70; bpm <= 180; bpm += 0.5) { const s = score(bpm); if (s > bestScore) { bestScore = s; best = bpm; } }
+  // 절반·두 배 속도는 구분이 애매하다. 80보다 느리게 잡혔는데 두 배도 충분히 맞으면 두 배를 고른다
+  // (틀리면 조각 모드에서 Ctrl+↑↓로 ×2 / ÷2)
+  if (best < 80 && score(best * 2) > bestScore * 0.5) { best *= 2; bestScore = score(best); }
+  const coarse = best;
+  for (let bpm = coarse - 0.5; bpm <= coarse + 0.5; bpm += 0.05) { const s = score(bpm); if (s > bestScore) { bestScore = s; best = bpm; } }
+  best = Math.round(best * 100) / 100;
+  // 첫 박 위치(대략): 박 간격마다 더했을 때 가장 큰 자리
+  const lag = 60 * fps / best;
+  let phase = 0, phaseScore = -1;
+  for (let p = 0; p < lag; p++) {
+    let s = 0;
+    for (let x = p; x < env.length; x += lag) s += at(x);
+    if (s > phaseScore) { phaseScore = s; phase = p; }
+  }
+  return refineTempo(data, rate, n, best, phase / fps);
+}
+
+// 정밀하게 맞추기: 타격 순간을 3ms 단위로 찾고, 박 위에 있는 타격들의 (박 번호, 시각)을 직선으로 맞춘다.
+// 직선의 기울기 = 한 박 길이, 시작점 = 첫 박 위치
+function refineTempo(data, rate, n, bpm, start) {
+  // 크기는 23ms(1024샘플) 길이로 재고, 그 창을 3ms(128샘플)씩 옮긴다.
+  // 창이 너무 짧으면 낮은 킥 소리의 물결 자체를 새 타격으로 잘못 잡는다.
+  const hop = 128, win = 1024, cs = new Float64Array(n + 1), env = [];
+  for (let i = 0; i < n; i++) cs[i + 1] = cs[i] + data[i] * data[i];
+  let prev = 0;
+  for (let i = 0; i + win <= n; i += hop) {
+    const e = Math.sqrt((cs[i + win] - cs[i]) / win);
+    env.push(Math.max(0, e - prev));
+    prev = e;
+  }
+  let mean = 0;
+  for (const v of env) mean += v;
+  mean /= env.length;
+  const onsets = [];   // [시각, 세기]
+  let last = -1e9;
+  for (let f = 1; f < env.length - 1; f++)
+    if (env[f] > mean * 4 && env[f] >= env[f - 1] && env[f] >= env[f + 1] && (f - last) * hop > rate * 0.08) {
+      onsets.push([(f * hop + win) / rate, env[f]]);   // 창 끝에 소리가 막 들어온 순간이 크기 증가가 가장 큰 때
+      last = f;
+    }
+  if (onsets.length < 8) return { bpm, start };
+
+  // 1) 대략 값 ±2% 안의 BPM과 첫 박 후보를 전부 대 보고, 타격이 격자에 가장 많이(세게) 맞는 조합을 고른다
+  let beat = 60 / bpm, best = -1;
+  for (let b = bpm * 0.98; b <= bpm * 1.02; b += bpm * 0.0005) {
+    const bt = 60 / b;
+    for (let s = 0; s < bt; s += 0.004) {
+      let c = 0;
+      for (const [t, w] of onsets) {
+        const r = (t - s) / bt;
+        if (Math.abs(r - Math.round(r)) * bt < 0.015) c += w;
+      }
+      if (c > best) { best = c; beat = bt; start = s; }
+    }
+  }
+  // 2) 격자 위에 있는 타격들의 (박 번호, 시각)을 직선으로 맞춰 더 정밀하게
+  for (let pass = 0; pass < 2; pass++) {
+    const pts = [];
+    for (const [t] of onsets) {
+      const k = Math.round((t - start) / beat);
+      if (Math.abs(t - start - k * beat) < beat * 0.05) pts.push([k, t]);
+    }
+    if (pts.length < 8) break;
+    const m = pts.length, sk = pts.reduce((a, p) => a + p[0], 0), st = pts.reduce((a, p) => a + p[1], 0);
+    const skk = pts.reduce((a, p) => a + p[0] * p[0], 0), skt = pts.reduce((a, p) => a + p[0] * p[1], 0);
+    const b = (m * skt - sk * st) / (m * skk - sk * sk), a = (st - b * sk) / m;
+    if (!(b > 0.25 && b < 1.2)) break;   // 엉뚱한 값이면 앞 단계 값을 그대로 쓴다
+    beat = b; start = a;
+  }
+  start -= Math.floor(start / beat) * beat;   // 0초 이후의 첫 박
+  return { bpm: Math.round((60 / beat) * 100) / 100, start };
+}
+
+// ---------- 조각 모드 조작 ----------
+// 구간 옮기기 (원곡 기준 박 단위)
+function moveRegion(slot, beats) {
+  const m = SAMPLE_META[slot], beat = 60 / m.bpm, len = SAMPLES[slot].duration;
+  m.start = Math.max(0, Math.min(len - beat, m.start + beats * beat));
+  saveSampleMeta(slot);
+  toast(t("regionAt")(Math.floor(m.start / (beat * 4)) + 1, m.start.toFixed(1)));
+  if (preview.v) startPreview(slot);
+}
+// 감지가 두 배·절반으로 틀렸을 때 고친다
+function scaleSongBpm(slot, f) {
+  const m = SAMPLE_META[slot];
+  m.bpm = Math.max(40, Math.min(300, Math.round(m.bpm * f * 2) / 2));
+  saveSampleMeta(slot);
+  toast(t("songBpm")(m.bpm));
+}
+function toggleMatch(slot) {
+  const m = SAMPLE_META[slot];
+  m.match = !m.match;
+  saveSampleMeta(slot);
+  toast(t("matchSet")(m.match));
+}
+// 구간 전체를 루프 처음부터 깔기 / 빼기 (구간 16박 = 64칸마다 반복)
+function toggleRegionLoop(slot) {
+  const id = "u" + slot, isLoop = e => e.track === id && e.midi === CHOP_WHOLE;
+  if (proj.events.some(isLoop)) { change(() => { proj.events = proj.events.filter(e => !isLoop(e)); }); toast(t("loopOff")); return; }
+  change(() => {
+    for (let s = 0; s < totalSteps(); s += 64)
+      proj.events.push({ kind: "note", track: id, midi: CHOP_WHOLE, len: Math.min(64, totalSteps() - s), step: s });
+  });
+  toast(t("loopOn"));
+  if (!playing) startPlay();
+}
+// 원곡 미리 듣기: 구간 시작부터 원래 속도로 20초 (다시 누르면 멈춤)
+const preview = { v: null };
+function startPreview(slot) {
+  if (preview.v) { stopVoice(preview.v, ctx.currentTime); preview.v = null; }
+  const s = ctx.createBufferSource(), g = gainNode(0.9), now = ctx.currentTime;
+  s.buffer = SAMPLES[slot];
+  s.connect(g).connect(master);
+  s.start(now, SAMPLE_META[slot].start, 20);
+  preview.v = track(g, [s]);
+  Object.assign(preview.v, { start: now, attack: 0, release: 0.05 });
+  s.onended = () => { active.delete(preview.v); if (preview.v && preview.v.srcs[0] === s) preview.v = null; };
+}
+function togglePreview(slot) {
+  if (preview.v) { stopVoice(preview.v, ctx.currentTime); preview.v = null; }
+  else startPreview(slot);
 }
 
 function concat(arrs) {
